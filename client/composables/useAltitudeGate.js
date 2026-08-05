@@ -2,6 +2,7 @@ import { ref, computed } from 'vue';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 import { useTilesetSource } from '@shared-composables/useTilesetSource.js';
 import { prewarmStreetView } from '@/3d_street/streetView.js';
+import { groundContactFromRelative } from './flightAltitudeMath.js';
 
 /* global Cesium */
 
@@ -33,6 +34,7 @@ export const PHASES = {
 export function useAltitudeGate(drone) {
   const { getActiveTileset, activeSource } = useTilesetSource();
   const surfaceAlt = ref(0);
+  const hasSurfaceSample = ref(false);
   const isOnGround = ref(true);
   const flightPhase = ref(PHASES.IDLE);
   const lastSequence = ref('landing'); // tracks last auto sequence: 'takeoff' or 'landing'
@@ -78,16 +80,13 @@ export function useAltitudeGate(drone) {
     const sampled = sampleSurfaceAltitude(viewer);
     if (sampled !== null) {
       surfaceAlt.value = sampled;
+      hasSurfaceSample.value = true;
     }
 
     const relativeAlt = drone.alt - surfaceAlt.value;
 
-    // Hysteresis: only change state when crossing the appropriate threshold.
-    if (relativeAlt <= DESCEND_THRESHOLD) {
-      isOnGround.value = true;
-    } else if (relativeAlt >= ASCEND_THRESHOLD) {
-      isOnGround.value = false;
-    }
+    // Ground contact is independent from the 8–12 m Street View transition.
+    isOnGround.value = groundContactFromRelative(relativeAlt, isOnGround.value);
 
     return {
       relativeAlt,
@@ -341,6 +340,7 @@ export function useAltitudeGate(drone) {
 
   return {
     surfaceAlt,
+    hasSurfaceSample,
     isOnGround,
     flightPhase,
     lastSequence,

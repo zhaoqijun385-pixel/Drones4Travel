@@ -2,7 +2,7 @@ import { useDrone } from './useDrone.js';
 import { useFlightCommands } from './useFlightCommands.js';
 
 const MOVEMENT_SPEED = 0.0002; // degrees per frame at full deflection
-const ALTITUDE_SPEED = 20.0; // meters per second at full deflection
+const ALTITUDE_SPEED = 3.0; // meters per second at full deflection
 const ROTATION_SPEED = 60.0; // degrees per second at full deflection
 const ZOOM_RATE = 2.5; // zoom levels per second at full deflection (exponential H-mode)
 

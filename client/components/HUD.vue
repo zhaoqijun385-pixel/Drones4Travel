@@ -3,8 +3,8 @@ import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useDrone } from '@shared-composables/useDrone.js';
 
-const { drone, gimbal } = useDrone();
 const { t } = useI18n();
+const { drone } = useDrone();
 
 const props = defineProps({
   flight: {
@@ -13,145 +13,84 @@ const props = defineProps({
   },
   camera: {
     type: Object,
-    default: () => ({ mode: '-', yaw: 0, pitch: 0, roll: 0 }),
+    default: () => ({ mode: '-' }),
   },
-  // Real-drone telemetry (useDroneTelemetry). When set, the HUD shows the
-  // physical drone's live state instead of the simulator rows.
-  real: {
-    type: Object,
-    default: null,
-  },
-  // The OpenClaw panel occupies the lower-right corner on AerialView.
-  avoidRight: {
-    type: Boolean,
-    default: false,
-  },
+  real: { type: Object, default: null },
+  selectedDrone: { type: Object, default: null },
+  hasControl: { type: Boolean, default: false },
+  avoidRight: { type: Boolean, default: false },
 });
 
-// Null-safe number formatting ('-' until the first frame of a category).
-const fmt = (v, digits = 2) =>
-  v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(digits);
+const fmt = (value, digits = 1) =>
+  value === null || value === undefined || Number.isNaN(Number(value))
+    ? '—'
+    : Number(value).toFixed(digits);
 
-const isLinked = computed(() => !props.real || props.real.linked);
-const linkLabel = computed(() => {
-  if (!props.real) return t('hud.simulated');
-  return props.real.linked ? t('hud.live') : t('hud.lost');
+const identity = computed(() => {
+  if (props.selectedDrone) return props.selectedDrone.name || props.selectedDrone.droneId;
+  return props.real ? 'Crazyflie' : t('hud.local_drone');
 });
-
-const linkRate = computed(() => {
-  if (!props.real?.linked) return '-';
-  return `${fmt(props.real.hz, 1)} ${t('hud.hz')}`;
+const linked = computed(() => props.real ? Boolean(props.real.linked) : props.selectedDrone?.online !== false);
+const phase = computed(() => {
+  if (props.real) return props.real.linked ? t('hud.manual') : t('hud.lost');
+  const value = props.selectedDrone?.phase;
+  return value ? t(`hud.phase_${value}`) : t('hud.manual');
 });
+const altitude = computed(() => {
+  if (props.real) return props.real.position?.z;
+  if (props.selectedDrone && Number.isFinite(Number(props.selectedDrone.z))) return props.selectedDrone.z;
+  return drone.alt;
+});
+const battery = computed(() => {
+  if (props.real) return props.real.battery?.voltage == null ? '—' : `${fmt(props.real.battery.voltage, 2)} V`;
+  return props.selectedDrone?.battery == null ? '—' : `${fmt(props.selectedDrone.battery, 0)}%`;
+});
+const target = computed(() => props.selectedDrone?.missionTarget || t('hud.no_task'));
+const progress = computed(() => Math.round(Number(props.selectedDrone?.missionProgress || 0) * 100));
 </script>
 
 <template>
   <section
     class="hud"
-    :class="{
-      'hud--real': real,
-      'hud--sim': !real,
-      'hud--avoid-right': avoidRight,
-      'hud--lost': real && !real.linked,
-    }"
+    :class="{ 'hud--avoid-right': avoidRight, 'hud--lost': !linked }"
     role="status"
-    :aria-label="t('hud.telemetry')"
+    :aria-label="t('hud.flight_status')"
   >
-    <header class="hud-header">
-      <div class="hud-heading">
-        <span class="hud-signal" aria-hidden="true"><i /></span>
-        <span class="hud-eyebrow">{{ t('hud.telemetry') }}</span>
-        <span class="hud-mode">{{ real ? t('hud.real') : t('hud.simulation') }}</span>
+    <div class="hud__identity">
+      <span class="hud__beacon" :class="{ 'is-lost': !linked }" aria-hidden="true" />
+      <div>
+        <small>{{ real ? t('hud.real') : t('hud.selected_drone') }}</small>
+        <strong>{{ identity }}</strong>
       </div>
-      <div class="hud-link" :class="{ 'hud-link--lost': !isLinked }">
-        <span class="hud-link__dot" aria-hidden="true" />
-        <span>{{ linkLabel }}</span>
-        <span v-if="real" class="hud-link__rate">{{ linkRate }}</span>
-      </div>
-    </header>
-
-    <!-- Physical Crazyflie telemetry. Keep the three-axis values aligned so
-         they can be scanned quickly without expanding the panel. -->
-    <div v-if="real" class="hud-grid hud-grid--real">
-      <section class="hud-card hud-card--wide">
-        <div class="hud-card__title">{{ t('hud.position') }} <span>m</span></div>
-        <div class="hud-axis-grid">
-          <div class="hud-axis"><span>X</span><strong>{{ fmt(real.position?.x) }}</strong></div>
-          <div class="hud-axis"><span>Y</span><strong>{{ fmt(real.position?.y) }}</strong></div>
-          <div class="hud-axis"><span>Z</span><strong>{{ fmt(real.position?.z) }}</strong></div>
-        </div>
-      </section>
-
-      <section class="hud-card hud-card--wide">
-        <div class="hud-card__title">{{ t('hud.attitude') }} <span>°</span></div>
-        <div class="hud-axis-grid">
-          <div class="hud-axis"><span>{{ t('hud.yaw_short') }}</span><strong>{{ fmt(real.attitude?.yaw, 1) }}</strong></div>
-          <div class="hud-axis"><span>{{ t('hud.pitch_short') }}</span><strong>{{ fmt(real.attitude?.pitch, 1) }}</strong></div>
-          <div class="hud-axis"><span>{{ t('hud.roll_short') }}</span><strong>{{ fmt(real.attitude?.roll, 1) }}</strong></div>
-        </div>
-      </section>
-
-      <section class="hud-card hud-card--power">
-        <div class="hud-card__title">{{ t('hud.power') }}</div>
-        <div class="hud-primary-value">{{ fmt(real.battery?.voltage) }} <small>V</small></div>
-        <div class="hud-card__hint">{{ t('hud.battery') }}</div>
-      </section>
     </div>
 
-    <!-- Simulator telemetry. The same card language is used, but the
-         existing flight, camera, position and gimbal values remain intact. -->
-    <div v-else class="hud-grid hud-grid--sim">
-      <section class="hud-card hud-card--flight">
-        <div class="hud-card__title">{{ t('hud.flight') }} <b>{{ flight.mode }}</b></div>
-        <div class="hud-card__line">
-          <span>{{ t('hud.mode') }}</span><strong>{{ flight.mode }}</strong>
-        </div>
-        <div class="hud-card__line hud-card__line--muted">
-          <template v-if="flight.mode === 'M'">vx {{ fmt(flight.vx) }} · vy {{ fmt(flight.vy) }}</template>
-          <template v-else-if="flight.mode === 'R'">{{ t('hud.yaw_short') }} {{ fmt(flight.yaw) }}</template>
-          <template v-else-if="flight.mode === 'H'">vz {{ fmt(flight.vz) }}</template>
-          <template v-else>—</template>
-        </div>
-      </section>
+    <div class="hud__metric">
+      <small>{{ t('hud.state') }}</small>
+      <strong>{{ phase }}</strong>
+    </div>
+    <div class="hud__metric">
+      <small>{{ t('hud.altitude') }}</small>
+      <strong>{{ fmt(altitude, 2) }} <i>m</i></strong>
+    </div>
+    <div class="hud__metric">
+      <small>{{ t('hud.battery') }}</small>
+      <strong>{{ battery }}</strong>
+    </div>
+    <div class="hud__metric">
+      <small>{{ t('hud.control') }}</small>
+      <strong>{{ hasControl ? t('hud.control_owned') : t('hud.control_safe') }}</strong>
+    </div>
 
-      <section class="hud-card hud-card--flight">
-        <div class="hud-card__title">{{ t('hud.camera') }} <b>{{ camera.mode }}</b></div>
-        <div class="hud-card__line">
-          <span>{{ t('hud.mode') }}</span><strong>{{ camera.mode }}</strong>
-        </div>
-        <div class="hud-card__line hud-card__line--muted">
-          <template v-if="camera.mode === 'Z'">{{ t('hud.yaw_short') }} {{ fmt(camera.yaw) }}</template>
-          <template v-else-if="camera.mode === 'Y'">{{ t('hud.pitch_short') }} {{ fmt(camera.pitch) }}</template>
-          <template v-else-if="camera.mode === 'X'">{{ t('hud.roll_short') }} {{ fmt(camera.roll) }}</template>
-          <template v-else>—</template>
-        </div>
-      </section>
-
-      <section class="hud-card hud-card--wide">
-        <div class="hud-card__title">{{ t('hud.position') }} <span>° / m</span></div>
-        <div class="hud-axis-grid hud-axis-grid--sim">
-          <div class="hud-axis"><span>{{ t('hud.lat_short') }}</span><strong>{{ fmt(drone.lat, 4) }}</strong></div>
-          <div class="hud-axis"><span>{{ t('hud.lon_short') }}</span><strong>{{ fmt(drone.lon, 4) }}</strong></div>
-          <div class="hud-axis"><span>{{ t('hud.alt_short') }}</span><strong>{{ fmt(drone.alt, 2) }}</strong></div>
-        </div>
-      </section>
-
-      <section class="hud-card hud-card--wide">
-        <div class="hud-card__title">{{ t('hud.direction') }} <span>°</span></div>
-        <div class="hud-axis-grid">
-          <div class="hud-axis"><span>{{ t('hud.yaw_short') }}</span><strong>{{ fmt(drone.heading, 1) }}</strong></div>
-          <div class="hud-axis"><span>{{ t('hud.pitch_short') }}</span><strong>0.0</strong></div>
-          <div class="hud-axis"><span>{{ t('hud.roll_short') }}</span><strong>0.0</strong></div>
-        </div>
-      </section>
-
-      <section class="hud-card hud-card--gimbal">
-        <div class="hud-card__title">{{ t('hud.gimbal') }} <span>°</span></div>
-        <div class="hud-axis-grid">
-          <div class="hud-axis"><span>{{ t('hud.yaw_short') }}</span><strong>{{ fmt(gimbal.yaw, 1) }}</strong></div>
-          <div class="hud-axis"><span>{{ t('hud.pitch_short') }}</span><strong>{{ fmt(gimbal.pitch, 1) }}</strong></div>
-          <div class="hud-axis"><span>{{ t('hud.roll_short') }}</span><strong>{{ fmt(gimbal.roll, 1) }}</strong></div>
-        </div>
-      </section>
+    <div class="hud__route">
+      <div class="hud__route-label">
+        <span>{{ target }}</span>
+        <b>{{ progress }}%</b>
+      </div>
+      <div class="hud__route-track">
+        <span class="hud__route-pad" />
+        <i><b :style="{ width: `${progress}%` }" /></i>
+        <span class="hud__route-target" />
+      </div>
     </div>
   </section>
 </template>
@@ -159,348 +98,96 @@ const linkRate = computed(() => {
 <style scoped>
 .hud {
   position: absolute;
-  left: 50%;
-  bottom: 48px;
+  right: 94px;
+  bottom: 24px;
+  left: 94px;
   z-index: 50;
-  width: min(640px, calc(100vw - 188px));
-  transform: translateX(-50%);
-  box-sizing: border-box;
-  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(150px, 1.3fr) repeat(4, minmax(80px, 0.65fr)) minmax(170px, 1fr);
+  align-items: center;
+  gap: 0;
+  min-height: 58px;
   overflow: hidden;
-  border: 1px solid rgba(74, 222, 128, 0.25);
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(5, 16, 13, 0.92), rgba(3, 10, 16, 0.88));
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(10px);
-  color: #dcfce7;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.76rem;
-  line-height: 1.25;
+  border: 1px solid rgba(109, 199, 232, 0.28);
+  border-radius: 8px;
+  background: rgba(7, 17, 27, 0.94);
+  box-shadow: 0 13px 34px rgba(0, 0, 0, 0.34), inset 0 1px rgba(255, 255, 255, 0.05);
+  color: #eaf6fb;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
   pointer-events: none;
   contain: layout paint;
 }
 
-.hud--lost {
-  border-color: rgba(248, 113, 113, 0.42);
-}
+.hud--avoid-right { right: 490px; }
+.hud--lost { border-color: rgba(255, 107, 95, 0.5); }
 
-/* OpenClaw is fixed to the lower-right. Move the HUD into the remaining
-   lower band only while that panel is visible. */
-.hud--avoid-right {
-  right: 500px;
-  left: 94px;
-  width: auto;
-  transform: none;
-}
+.hud__identity,
+.hud__metric,
+.hud__route { min-width: 0; padding: 9px 12px; }
+.hud__identity,
+.hud__metric { border-right: 1px solid rgba(109, 199, 232, 0.11); }
+.hud__identity { display: flex; align-items: center; gap: 9px; }
+.hud__identity div,
+.hud__metric { min-width: 0; }
 
-.hud-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 26px;
-  padding: 0 3px 8px;
-  border-bottom: 1px solid rgba(134, 239, 172, 0.16);
-}
-
-.hud-heading,
-.hud-link {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-
-.hud-signal {
-  display: inline-grid;
-  width: 13px;
-  height: 13px;
-  place-items: center;
-  border: 1px solid rgba(74, 222, 128, 0.65);
-  border-radius: 50%;
-}
-
-.hud-signal i,
-.hud-link__dot {
+.hud small {
   display: block;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #4ade80;
-  box-shadow: 0 0 8px rgba(74, 222, 128, 0.9);
-}
-
-.hud-eyebrow {
-  color: #bbf7d0;
-  font-size: 0.64rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
+  margin-bottom: 3px;
+  color: #7893a0;
+  font-size: 0.52rem;
+  font-weight: 750;
+  letter-spacing: 0.11em;
   text-transform: uppercase;
 }
-
-.hud-mode {
-  padding: 3px 6px;
-  border: 1px solid rgba(134, 239, 172, 0.24);
-  border-radius: 4px;
-  color: #86efac;
-  font-size: 0.6rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.hud-link {
-  color: #86efac;
-  font-size: 0.68rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.hud-link__rate {
-  color: rgba(220, 252, 231, 0.56);
-  font-weight: 400;
-}
-
-.hud-link--lost,
-.hud-link--lost .hud-link__rate {
-  color: #fca5a5;
-}
-
-.hud-link--lost .hud-link__dot {
-  background: #f87171;
-  box-shadow: 0 0 8px rgba(248, 113, 113, 0.85);
-}
-
-.hud-grid {
-  display: grid;
-  gap: 7px;
-  padding-top: 8px;
-}
-
-.hud-grid--real {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 112px;
-}
-
-.hud-grid--sim {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.hud-card {
-  min-width: 0;
-  padding: 8px 9px;
-  border: 1px solid rgba(134, 239, 172, 0.12);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.2);
-}
-
-.hud-card--flight {
-  grid-column: span 2;
-}
-
-.hud-card--wide {
-  grid-column: span 2;
-}
-
-.hud-card--gimbal {
-  grid-column: span 2;
-}
-
-.hud-card--power {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.hud-card__title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 7px;
-  color: #86efac;
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.hud-card__title span {
-  color: rgba(220, 252, 231, 0.42);
-  font-size: 0.58rem;
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.hud-card__title b {
-  color: #f0fdf4;
-  font-size: 0.8rem;
-}
-
-.hud-axis-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.hud-axis {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.hud-axis span,
-.hud-card__line span,
-.hud-card__hint {
-  color: rgba(220, 252, 231, 0.48);
-  font-size: 0.58rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.hud-axis strong,
-.hud-card__line strong,
-.hud-primary-value {
+.hud strong {
+  display: block;
   overflow: hidden;
-  color: #f0fdf4;
-  font-size: 0.78rem;
+  color: #eaf6fb;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.hud strong i { color: #7893a0; font-size: 0.58rem; font-style: normal; font-weight: 400; }
 
-.hud-card__line {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 5px;
-}
+.hud__beacon { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 2px; background: #5dd5a4; box-shadow: 0 0 10px rgba(93, 213, 164, 0.9); transform: rotate(45deg); }
+.hud__beacon.is-lost { background: #ff6b5f; box-shadow: 0 0 10px rgba(255, 107, 95, 0.85); }
 
-.hud-card__line--muted {
-  display: block;
-  overflow: hidden;
-  color: rgba(220, 252, 231, 0.66);
-  font-size: 0.66rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.hud__route-label { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 7px; color: #aac0ca; font-size: 0.58rem; }
+.hud__route-label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud__route-label b { color: #6dc7e8; font-family: "SFMono-Regular", Consolas, monospace; }
+.hud__route-track { display: grid; grid-template-columns: 7px 1fr 7px; align-items: center; gap: 5px; }
+.hud__route-track > span { width: 7px; height: 7px; box-sizing: border-box; border: 2px solid #6dc7e8; }
+.hud__route-pad { transform: rotate(45deg); }
+.hud__route-target { border-radius: 50%; }
+.hud__route-track i { position: relative; height: 3px; overflow: hidden; border-radius: 2px; background: #1c3442; }
+.hud__route-track i b { position: absolute; inset: 0 auto 0 0; background: #5dd5a4; transition: width 120ms linear; }
 
-.hud-primary-value {
-  margin: 1px 0 5px;
-  color: #bbf7d0;
-  font-size: 1.05rem;
-}
-
-.hud-primary-value small {
-  color: rgba(220, 252, 231, 0.55);
-  font-size: 0.62rem;
-  font-weight: 400;
-}
-
-.hud-card__hint {
-  text-transform: none;
-}
-
-@media (max-width: 900px) {
-  .hud {
-    width: min(560px, calc(100vw - 144px));
-  }
-
-  .hud--avoid-right {
-    right: 410px;
-    left: 76px;
-    width: auto;
-  }
-
-  .hud-grid--real {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .hud-card--power {
-    grid-column: span 2;
-    min-height: 52px;
-  }
+@media (max-width: 980px) {
+  .hud { grid-template-columns: minmax(130px, 1fr) repeat(3, minmax(72px, 0.6fr)) minmax(130px, 1fr); }
+  .hud__metric:nth-of-type(5) { display: none; }
+  .hud--avoid-right { right: 400px; }
 }
 
 @media (max-width: 640px) {
   .hud {
     right: 68px;
-    bottom: 40px;
+    bottom: 12px;
     left: 68px;
-    width: auto;
-    transform: none;
-    padding: 8px;
-    font-size: 0.68rem;
+    grid-template-columns: 1.2fr 0.7fr 0.7fr;
+    min-height: 50px;
   }
-
-  .hud--avoid-right {
-    right: 68px;
-    left: 68px;
-    width: auto;
-    top: 24px;
-    bottom: auto;
-  }
-
-  .hud-header {
-    gap: 6px;
-    padding-bottom: 6px;
-  }
-
-  .hud-eyebrow {
-    font-size: 0.56rem;
-  }
-
-  .hud-mode {
-    display: none;
-  }
-
-  .hud-grid {
-    gap: 5px;
-    padding-top: 6px;
-  }
-
-  .hud-card {
-    padding: 6px 7px;
-  }
-
-  .hud-card__title {
-    margin-bottom: 5px;
-    font-size: 0.55rem;
-  }
-
-  .hud-axis-grid {
-    gap: 4px;
-  }
-
-  .hud-axis strong,
-  .hud-card__line strong {
-    font-size: 0.68rem;
-  }
-
-  .hud-axis span,
-  .hud-card__line span,
-  .hud-card__hint {
-    font-size: 0.5rem;
-  }
-
-  .hud-card--flight,
-  .hud-card--wide,
-  .hud-card--gimbal {
-    grid-column: span 3;
-  }
-
-  .hud-grid--real .hud-card--wide,
-  .hud-grid--real .hud-card--power {
-    grid-column: span 1;
-  }
+  .hud--avoid-right { top: auto; right: 68px; left: 68px; }
+  .hud__metric:nth-of-type(2),
+  .hud__metric:nth-of-type(5),
+  .hud__route { display: none; }
+  .hud__identity,
+  .hud__metric { padding: 7px 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .hud,
-  .hud * {
-    transition: none !important;
-    animation: none !important;
-  }
+  .hud * { animation: none !important; transition: none !important; }
 }
 </style>

@@ -8,5 +8,8 @@
   "no_drone": "No drone selected",
   "video_connecting": "Connecting to live view…",
   "video_unavailable": "Live view unavailable",
-  "no_stream": "No stream configured"
+  "no_stream": "No stream configured",
+  "map_scope": "Map scope",
+  "all_drones": "All drones",
+  "selected_only": "Follow selected"
 }

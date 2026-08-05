@@ -91,6 +91,7 @@ const viewer = new Cesium.Viewer('cesiumContainer', {
 // mobile path stays cheap. It is only updated when the Vue flight deck opts in
 // with ?fleet=demo, so the original single-drone scene is unchanged by default.
 const fleetEntities = new Map();
+const fleetRouteEntities = new Map();
 const fleetColors = new Map();
 let fleetStats = { objects: 0, visible: 0 };
 
@@ -105,12 +106,29 @@ function createFleetEntity(state) {
     const entity = viewer.entities.add({
         id: `fleet:${state.droneId}`,
         position: Cesium.Cartesian3.fromDegrees(state.lon, state.lat, state.alt),
+        orientation: Cesium.Transforms.headingPitchRollQuaternion(
+            Cesium.Cartesian3.fromDegrees(state.lon, state.lat, state.alt),
+            new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(Number(state.heading ?? state.yaw ?? 0)), 0, 0),
+        ),
+        model: {
+            uri: '/models/fleet-drone.gltf',
+            scale: 0.72,
+            minimumPixelSize: 22,
+            maximumScale: 2.8,
+            color,
+            colorBlendMode: Cesium.ColorBlendMode.MIX,
+            colorBlendAmount: 0.28,
+            silhouetteColor: Cesium.Color.WHITE,
+            silhouetteSize: 0,
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 360),
+        },
         point: {
-            pixelSize: state.local ? 14 : 10,
+            pixelSize: state.local ? 12 : 9,
             color,
             outlineColor: Cesium.Color.WHITE.withAlpha(0.88),
             outlineWidth: state.local ? 3 : 1,
             disableDepthTestDistance: 500,
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(320, 500),
         },
         label: {
             text: state.name || state.droneId,
@@ -129,6 +147,42 @@ function createFleetEntity(state) {
     entity._fleetLastName = state.name;
     fleetEntities.set(state.droneId, entity);
     return entity;
+}
+
+function syncFleetRoute(state, color, inRange) {
+    const route = Array.isArray(state.route) ? state.route : [];
+    let entity = fleetRouteEntities.get(state.droneId);
+    if (route.length < 2) {
+        if (entity) {
+            viewer.entities.remove(entity);
+            fleetRouteEntities.delete(state.droneId);
+        }
+        return;
+    }
+    const positions = route
+        .filter((point) => Number.isFinite(Number(point.lon)) && Number.isFinite(Number(point.lat)))
+        .map((point) => Cesium.Cartesian3.fromDegrees(
+            Number(point.lon),
+            Number(point.lat),
+            Math.max(0, Number(point.alt) || 0),
+        ));
+    if (positions.length < 2) return;
+    if (!entity) {
+        entity = viewer.entities.add({
+            id: `fleet-route:${state.droneId}`,
+            polyline: {
+                positions,
+                width: 2,
+                material: color.withAlpha(0.72),
+                clampToGround: false,
+            },
+        });
+        fleetRouteEntities.set(state.droneId, entity);
+    } else {
+        entity.polyline.positions = positions;
+        entity.polyline.material = color.withAlpha(0.72);
+    }
+    entity.show = inRange && state.phase !== 'parked';
 }
 
 window.updateDroneFleet = function updateDroneFleet(states = [], options = {}) {
@@ -155,8 +209,15 @@ window.updateDroneFleet = function updateDroneFleet(states = [], options = {}) {
         );
         const distance = localPosition ? Cesium.Cartesian3.distance(localPosition, position) : 0;
         const inRange = Boolean(state.online !== false) && distance <= renderDistance;
+        const color = fleetColor(state.color);
         entity.position.setValue(position);
-        entity.show = inRange;
+        entity.orientation = Cesium.Transforms.headingPitchRollQuaternion(
+            position,
+            new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(Number(state.heading ?? state.yaw ?? 0)), 0, 0),
+        );
+        const firstPerson = state.droneId === options.firstPersonDroneId;
+        entity.show = inRange && !firstPerson;
+        entity.model.show = inRange && !firstPerson;
         entity.point.show = inRange;
         entity.label.show = inRange && distance <= labelDistance;
         if (state.name !== entity._fleetLastName) {
@@ -164,18 +225,21 @@ window.updateDroneFleet = function updateDroneFleet(states = [], options = {}) {
             entity._fleetLastName = state.name;
         }
         if (state.color !== entity._fleetLastColor) {
-            const color = fleetColor(state.color);
             entity.point.color = color;
             entity.label.fillColor = color;
+            entity.model.color = color;
             entity._fleetLastColor = state.color;
         }
         if (state.droneId === options.selectedDroneId) {
             entity.point.pixelSize = state.local ? 18 : 14;
             entity.point.outlineWidth = 3;
+            entity.model.silhouetteSize = 2;
         } else {
             entity.point.pixelSize = state.local ? 14 : 10;
             entity.point.outlineWidth = state.local ? 3 : 1;
+            entity.model.silhouetteSize = 0;
         }
+        syncFleetRoute(state, color, inRange);
         if (inRange) visible += 1;
     });
 
@@ -183,6 +247,9 @@ window.updateDroneFleet = function updateDroneFleet(states = [], options = {}) {
         if (!liveIds.has(droneId)) {
             viewer.entities.remove(entity);
             fleetEntities.delete(droneId);
+            const route = fleetRouteEntities.get(droneId);
+            if (route) viewer.entities.remove(route);
+            fleetRouteEntities.delete(droneId);
         }
     });
     fleetStats = { objects: list.length, visible };
@@ -190,7 +257,9 @@ window.updateDroneFleet = function updateDroneFleet(states = [], options = {}) {
 
 window.clearDroneFleet = function clearDroneFleet() {
     fleetEntities.forEach((entity) => viewer.entities.remove(entity));
+    fleetRouteEntities.forEach((entity) => viewer.entities.remove(entity));
     fleetEntities.clear();
+    fleetRouteEntities.clear();
     fleetStats = { objects: 0, visible: 0 };
 };
 
@@ -274,7 +343,7 @@ viewer.scene.renderError.addEventListener((scene, error) => {
  * current view are loaded and drawn), or after a safety timeout.
  * Without a tileset (fallback path), proceed after a short fixed delay.
  */
-function waitForTilesRendered(tileset, timeoutMs = 45000) {
+function waitForTilesRendered(tileset, timeoutMs = 8000) {
     return new Promise((resolve) => {
         if (!tileset) {
             setTimeout(resolve, 3000);
@@ -333,6 +402,13 @@ async function loadArena() {
         googleTileset = await Cesium.createGooglePhotorealistic3DTileset({
             onlyUsingWithGoogleGeocoder: true,
         });
+        // Prioritize a usable coarse scene. Fine photogrammetry keeps refining
+        // after the controls are visible instead of blocking the splash.
+        googleTileset.maximumScreenSpaceError = 24;
+        googleTileset.dynamicScreenSpaceError = true;
+        googleTileset.dynamicScreenSpaceErrorFactor = 4;
+        googleTileset.cullRequestsWhileMoving = true;
+        googleTileset.cullRequestsWhileMovingMultiplier = 60;
         // Explicit IBL spherical harmonics BEFORE the tileset enters the scene, so
         // every Google-tile model pipeline captures them when its shader is built —
         // otherwise scene.pickFromRay renders them with an empty vec3[9] uniform and
@@ -374,15 +450,22 @@ async function loadArena() {
     // signal — it becomes true only when every tile needed for the current
     // view is loaded AND drawn. The splash keeps playing until then (with a
     // safety cap) so the user never lands on an empty sky.
-    // Fleet demo is explicitly opt-in. On that path, do not make the whole
-    // page wait 45 seconds for a weak-network tile refinement wave; let the
-    // scene appear and allow Cesium to keep refining in the background. The
-    // default single-drone path keeps the original full-render wait.
+    // Fleet demo gets the shortest coarse-scene budget. The default path also
+    // becomes interactive before fine photogrammetry finishes; both continue
+    // refining in the background.
     const fleetDemo = new URLSearchParams(window.location.search).get('fleet') === 'demo';
-    await waitForTilesRendered(googleTileset, fleetDemo ? 12000 : 45000);
+    await waitForTilesRendered(googleTileset, fleetDemo ? 6000 : 8000);
 
     // Signal splash screen that Cesium 3D scene is ready with tiles rendered
     window.dispatchEvent(new CustomEvent('cesiumReady'));
+    // Once interaction is available, restore a balanced quality target without
+    // making the initial render wait for the second refinement wave.
+    if (googleTileset) {
+        setTimeout(() => {
+            if (!googleTileset || googleTileset.isDestroyed?.()) return;
+            googleTileset.maximumScreenSpaceError = 12;
+        }, 10000);
+    }
 }
 
 /**
@@ -406,6 +489,105 @@ window.updateCesiumCamera = function(state) {
         destination: position,
         orientation: { heading, pitch, roll }
     });
+};
+
+function fleetCameraOffset(state, mode = 'follow', range = 24) {
+    const heading = mode === 'top'
+        ? Cesium.Math.toRadians(Number(state.gimbalYaw || 0))
+        : Cesium.Math.toRadians(((Number(state.heading ?? state.yaw ?? 0) + 180 + Number(state.gimbalYaw || 0)) % 360 + 360) % 360);
+    const pitch = mode === 'top'
+        ? Cesium.Math.toRadians(-89)
+        : Cesium.Math.toRadians(Math.max(-80, Math.min(-8, -24 + Number(state.gimbalPitch || 0))));
+    return new Cesium.HeadingPitchRange(heading, pitch, Math.max(5, Number(range) || 24));
+}
+
+window.updateFleetCamera = function updateFleetCamera(state, options = {}) {
+    if (!viewer || !state || options.mode === 'free') return;
+    if (options.mode === 'fpv') {
+        const destination = Cesium.Cartesian3.fromDegrees(
+            Number(state.lon),
+            Number(state.lat),
+            Math.max(0, Number(state.alt) || 0) + 0.28,
+        );
+        viewer.camera.setView({
+            destination,
+            orientation: {
+                heading: Cesium.Math.toRadians(((Number(state.heading || state.yaw || 0) + Number(options.gimbalYaw || 0)) % 360 + 360) % 360),
+                pitch: Cesium.Math.toRadians(Number(options.gimbalPitch || 0)),
+                roll: Cesium.Math.toRadians(Number(options.gimbalRoll || 0)),
+            },
+        });
+        return;
+    }
+    const cameraState = {
+        ...state,
+        gimbalYaw: options.gimbalYaw,
+        gimbalPitch: options.gimbalPitch,
+    };
+    const target = Cesium.Cartesian3.fromDegrees(
+        Number(state.lon),
+        Number(state.lat),
+        Math.max(0, Number(state.alt) || 0),
+    );
+    viewer.camera.lookAt(target, fleetCameraOffset(cameraState, options.mode, options.range));
+};
+
+window.flyFleetCamera = function flyFleetCamera(state, options = {}) {
+    if (!viewer || !state) return;
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+    if (options.mode === 'fpv') {
+        viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+                Number(state.lon),
+                Number(state.lat),
+                Math.max(0, Number(state.alt) || 0) + 0.28,
+            ),
+            orientation: {
+                heading: Cesium.Math.toRadians(((Number(state.heading || state.yaw || 0) + Number(options.gimbalYaw || 0)) % 360 + 360) % 360),
+                pitch: Cesium.Math.toRadians(Number(options.gimbalPitch || 0)),
+                roll: Cesium.Math.toRadians(Number(options.gimbalRoll || 0)),
+            },
+            duration: Number(options.duration ?? 0.55),
+        });
+        return;
+    }
+    const target = Cesium.Cartesian3.fromDegrees(
+        Number(state.lon),
+        Number(state.lat),
+        Math.max(0, Number(state.alt) || 0),
+    );
+    viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(target, 1), {
+        duration: Number(options.duration ?? 0.7),
+        offset: fleetCameraOffset({
+            ...state,
+            gimbalYaw: options.gimbalYaw,
+            gimbalPitch: options.gimbalPitch,
+        }, options.mode, options.range),
+    });
+};
+
+window.showFleetOverview = function showFleetOverview(states = [], options = {}) {
+    if (!viewer) return;
+    const positions = states
+        .filter((state) => state && Number.isFinite(Number(state.lon)) && Number.isFinite(Number(state.lat)))
+        .map((state) => Cesium.Cartesian3.fromDegrees(
+            Number(state.lon),
+            Number(state.lat),
+            Math.max(0, Number(state.alt) || 0),
+        ));
+    if (!positions.length) return;
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+    const sphere = Cesium.BoundingSphere.fromPoints(positions);
+    const range = Math.max(Number(options.range) || 0, sphere.radius * 2.6, 36);
+    viewer.camera.flyToBoundingSphere(sphere, {
+        duration: Number(options.duration ?? 0.8),
+        offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-72), range),
+    });
+};
+
+window.releaseFleetCamera = function releaseFleetCamera() {
+    if (!viewer) return;
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
 };
 
 window.addEventListener('load', loadArena);

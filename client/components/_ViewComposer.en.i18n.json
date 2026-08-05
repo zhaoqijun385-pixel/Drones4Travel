@@ -1,4 +1,4 @@
 {
-  "flight": "Flight",
-  "gimbal": "Gimbal"
+  "flight": "Flight · press center for move / yaw / height",
+  "gimbal": "Camera gimbal · pan / tilt"
 }

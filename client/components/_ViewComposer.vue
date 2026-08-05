@@ -20,6 +20,8 @@ defineProps({
   realTelemetry: { type: Object, default: null },
   // Keep the HUD clear of AerialView's optional lower-right OpenClaw panel.
   hudAvoidRight: { type: Boolean, default: false },
+  hudDrone: { type: Object, default: null },
+  hudHasControl: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
 });
 
@@ -93,6 +95,8 @@ defineEmits([
       :flight="flight"
       :camera="camera"
       :real="realTelemetry"
+      :selected-drone="hudDrone"
+      :has-control="hudHasControl"
       :avoid-right="hudAvoidRight"
     />
   </div>

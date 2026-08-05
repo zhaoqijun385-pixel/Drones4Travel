@@ -28,4 +28,22 @@
   "lat_short": "lat",
   "lon_short": "lon",
   "alt_short": "alt"
+  ,"flight_status": "Flight status"
+  ,"local_drone": "Local drone"
+  ,"selected_drone": "Selected drone"
+  ,"state": "State"
+  ,"altitude": "Altitude"
+  ,"control": "Control"
+  ,"control_owned": "Owned"
+  ,"control_safe": "Observe"
+  ,"manual": "Manual standby"
+  ,"no_task": "No active task"
+  ,"phase_parked": "Parked"
+  ,"phase_queued": "Queued"
+  ,"phase_takeoff": "Taking off"
+  ,"phase_enroute": "En route"
+  ,"phase_onstation": "On station"
+  ,"phase_returning": "Returning"
+  ,"phase_landing": "Landing"
+  ,"phase_holding": "Holding"
 }

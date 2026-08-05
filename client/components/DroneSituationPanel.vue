@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import MapView from '@/2d_map/MapView.vue';
 import { createWhepPlayer } from '@shared-composables/useWhepPlayer.js';
@@ -25,8 +25,10 @@ let videoPlayer = null;
 let playingUrl = '';
 let mapPointTimer = null;
 let videoReleaseTimer = null;
+let mapWarmupHandle = null;
 const mapViewMounted = ref(false);
 const videoMounted = ref(false);
+const mapScope = ref('fleet');
 const VIDEO_CACHE_TTL_MS = 30_000;
 
 const selected = computed(() => props.selectedDrone || props.drones.find((drone) => drone.droneId === props.selectedDroneId) || null);
@@ -56,7 +58,9 @@ function syncMapPoint() {
   if (!drone) return;
   mapPoint.lat = numberOr(drone.lat, mapPoint.lat);
   mapPoint.lon = numberOr(drone.lon, mapPoint.lon);
-  mapPoint.alt = Math.max(10, numberOr(drone.alt, mapPoint.alt));
+  // Fleet states expose z as metres above their local pad. Prefer it for the
+  // low-altitude readout; MapView clamps its own zoom input to a usable range.
+  mapPoint.alt = Math.max(0, numberOr(drone.z, numberOr(drone.alt, mapPoint.alt)));
   mapPoint.heading = numberOr(drone.yaw, numberOr(drone.heading, mapPoint.heading));
 }
 
@@ -162,15 +166,36 @@ watch([() => props.open, () => props.mode], syncMapPointTimer, { immediate: true
 watch([() => props.open, () => props.mode, targetUrl], syncVideo, { immediate: true });
 watch(selected, syncMapPoint);
 
+onMounted(() => {
+  const warm = () => {
+    mapViewMounted.value = true;
+    syncMapPoint();
+  };
+  if (typeof window.requestIdleCallback === 'function') {
+    mapWarmupHandle = window.requestIdleCallback(warm, { timeout: 2500 });
+  } else {
+    mapWarmupHandle = window.setTimeout(warm, 1600);
+  }
+});
+
 onUnmounted(() => {
   stopMapPointTimer();
   cancelVideoRelease();
+  if (mapWarmupHandle) {
+    if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(mapWarmupHandle);
+    else window.clearTimeout(mapWarmupHandle);
+  }
   if (videoPlayer) videoPlayer.stop();
 });
 </script>
 
 <template>
-  <aside v-show="open" class="situation-panel" :class="`situation-panel--${mode}`" :aria-hidden="!open" aria-label="Drone situation window">
+  <aside
+    class="situation-panel"
+    :class="[`situation-panel--${mode}`, { 'situation-panel--hidden': !open }]"
+    :aria-hidden="!open"
+    aria-label="Drone situation window"
+  >
     <header class="situation-panel__header">
       <div class="situation-panel__identity">
         <span class="situation-panel__eyebrow">{{ t('dronesituationpanel.eyebrow') }}</span>
@@ -221,9 +246,19 @@ onUnmounted(() => {
           :fleet-drones="drones"
           :selected-drone-id="selectedDroneId"
           :shared-target="sharedTarget"
+          :visible="open && mode === 'map'"
+          :fleet-overview="mapScope === 'fleet'"
           map-type-id="roadmap"
           @drone-select="emit('select-drone', $event)"
         />
+        <div class="situation-panel__map-scope" role="group" :aria-label="t('dronesituationpanel.map_scope')">
+          <button type="button" :class="{ 'is-active': mapScope === 'fleet' }" @click="mapScope = 'fleet'">
+            {{ t('dronesituationpanel.all_drones') }} · {{ drones.length }}
+          </button>
+          <button type="button" :class="{ 'is-active': mapScope === 'selected' }" @click="mapScope = 'selected'">
+            {{ t('dronesituationpanel.selected_only') }}
+          </button>
+        </div>
         <div class="situation-panel__telemetry">
           <span>{{ mapPoint.lat.toFixed(5) }}, {{ mapPoint.lon.toFixed(5) }}</span>
           <b>{{ mapPoint.alt.toFixed(1) }} m</b>
@@ -267,6 +302,12 @@ onUnmounted(() => {
   color: #e8f4ff;
   font-family: Calibri, 'Segoe UI', sans-serif;
   pointer-events: auto;
+}
+
+.situation-panel--hidden {
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-120vw);
 }
 
 .situation-panel__header,
@@ -442,6 +483,36 @@ onUnmounted(() => {
   background: rgba(5, 16, 27, 0.74);
   font-family: 'Courier New', monospace;
   font-size: 0.6rem;
+}
+
+.situation-panel__map-scope {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  border-radius: 8px;
+  background: rgba(5, 16, 27, 0.82);
+  backdrop-filter: blur(8px);
+}
+
+.situation-panel__map-scope button {
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 5px;
+  color: rgba(232, 244, 255, 0.68);
+  background: transparent;
+  font: inherit;
+  font-size: 0.6rem;
+  cursor: pointer;
+}
+
+.situation-panel__map-scope button.is-active {
+  color: #05101b;
+  background: #7dd3fc;
+  font-weight: 750;
 }
 
 .situation-panel__telemetry b { color: #7dd3fc; }

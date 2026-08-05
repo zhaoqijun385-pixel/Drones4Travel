@@ -8,5 +8,8 @@
   "no_drone": "未选择无人机",
   "video_connecting": "正在连接实时画面…",
   "video_unavailable": "实时画面不可用",
-  "no_stream": "未配置视频流"
+  "no_stream": "未配置视频流",
+  "map_scope": "地图显示范围",
+  "all_drones": "全部无人机",
+  "selected_only": "跟随选中机"
 }

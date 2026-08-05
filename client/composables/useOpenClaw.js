@@ -69,7 +69,10 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
   const error = ref(null);
   const messages = ref([]);
   const sessionKey = ref(null);
+  const activeAgentId = ref('main');
+  const preferredSessionKey = ref(DEFAULT_SESSION_KEY);
   const pendingRequests = new Map();
+  const sessionMessages = new Map();
 
   let reconnectTimer = null;
   let reconnectDelay = RECONNECT_DELAY_MS;
@@ -88,6 +91,7 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
     if (messages.value.length > 200) {
       messages.value.shift();
     }
+    if (sessionKey.value) sessionMessages.set(sessionKey.value, messages.value);
   }
 
   function sendRaw(obj) {
@@ -177,6 +181,21 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
   }
 
   async function initSession() {
+    if (activeAgentId.value !== 'main') {
+      const key = preferredSessionKey.value || `agent:${activeAgentId.value}:main`;
+      try {
+        const created = await sendRequest('sessions.create', {
+          key,
+          agentId: activeAgentId.value,
+        });
+        sessionKey.value = created?.key || key;
+      } catch (e) {
+        // Existing sessions may reject a duplicate create. The deterministic
+        // key is still valid and chat.history confirms availability.
+        sessionKey.value = key;
+      }
+      return;
+    }
     try {
       const list = await sendRequest('sessions.list', { limit: 1 });
       if (list?.sessions && list.sessions.length > 0 && list.sessions[0]?.key) {
@@ -224,6 +243,7 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
             text: extractText(entry),
             time: formatTime(entry.timestamp),
           }));
+        sessionMessages.set(sessionKey.value, messages.value);
       }
     } catch (e) {
       console.warn('[OpenClaw] Failed to load history:', e.message);
@@ -232,6 +252,7 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
 
   function handleChatEvent(payload) {
     if (!payload || typeof payload !== 'object') return;
+    if (payload.sessionKey && sessionKey.value && payload.sessionKey !== sessionKey.value) return;
     const state = payload.state;
     const message = payload.message;
     const runId = payload.runId;
@@ -325,6 +346,23 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
     return sent;
   }
 
+  async function selectAgent({ agentId = 'main', sessionKey: nextSessionKey = '' } = {}) {
+    if (sessionKey.value) sessionMessages.set(sessionKey.value, messages.value);
+    activeAgentId.value = agentId || 'main';
+    preferredSessionKey.value = nextSessionKey
+      || (activeAgentId.value === 'main' ? DEFAULT_SESSION_KEY : `agent:${activeAgentId.value}:main`);
+    partialRunIds = new Map();
+    heartbeatRunIds = new Set();
+    messages.value = sessionMessages.get(preferredSessionKey.value) || [];
+    if (!isConnected.value) {
+      sessionKey.value = preferredSessionKey.value;
+      return;
+    }
+    await initSession();
+    messages.value = sessionMessages.get(sessionKey.value) || [];
+    await loadHistory();
+  }
+
   function connect() {
     if (ws.value) return;
     // Manual reconnect after an intentional close is allowed. The existing
@@ -398,6 +436,9 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
     isConnected,
     sendMessage,
     sendFleetContext,
+    selectAgent,
+    activeAgentId,
+    sessionKey,
     connect,
     close,
   };

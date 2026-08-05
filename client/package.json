@@ -8,7 +8,8 @@
     "predev": "node scripts/generate-splash-manifest.js",
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:fleet": "node --test tests/*.test.js"
   },
   "dependencies": {
     "matrix-js-sdk": "^42.0.0",

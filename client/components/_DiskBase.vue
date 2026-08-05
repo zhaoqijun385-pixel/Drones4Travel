@@ -30,7 +30,7 @@ const props = defineProps({
   },
   /**
    * When true, the joystick cycles between sub-modes by pressing the center
-   * knob: M/R/H for flight and X/Y/Z for camera.
+   * knob: M/R/H for flight and P/X for camera.
    */
   enableModeCycle: {
     type: Boolean,
@@ -70,7 +70,7 @@ const isModeCycling = computed(() => props.enableModeCycle);
 
 const cyclingModes = computed(() => {
   if (props.mode === 'flight') return ['M', 'R', 'H'];
-  if (props.mode === 'camera') return ['Z', 'Y', 'X'];
+  if (props.mode === 'camera') return ['P', 'X'];
   return [];
 });
 
@@ -154,19 +154,19 @@ function applyInput(dx, dy) {
           // Height/Altitude: vertical only. Lat/lon remain unchanged by the consumer.
           emit('move', {
             mode: 'H',
-            vz: -clamped.y * props.sensitivity,
+            vz: -clamped.y,
           });
           break;
       }
     } else if (props.mode === 'camera') {
-      // Gimbal X/Y/Z single-axis control.
-      // Z -> yaw, Y -> pitch, X -> roll.
+      // P provides natural two-axis pan/tilt; X is optional roll trim.
       switch (m) {
-        case 'Z':
-          emit('move', { mode: 'Z', yaw: clamped.x * props.sensitivity });
-          break;
-        case 'Y':
-          emit('move', { mode: 'Y', pitch: -clamped.y * props.sensitivity });
+        case 'P':
+          emit('move', {
+            mode: 'P',
+            yaw: clamped.x * props.sensitivity,
+            pitch: -clamped.y * props.sensitivity,
+          });
           break;
         case 'X':
           emit('move', { mode: 'X', roll: clamped.x * props.sensitivity });

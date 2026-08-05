@@ -1,13 +1,22 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useAppSettings } from './useAppSettings.js';
 import { useAuth } from './useAuth.js';
+import {
+  MISSION_PRESETS,
+  advanceMission,
+  parkingPose,
+  planGatherMission,
+  planMission,
+  planNavigateMission,
+  routePolyline,
+} from './fleetMissionPlanner.js';
 
 // The fleet layer is deliberately opt-in. The existing single-drone aerial
 // view keeps its original render path unless the URL contains ?fleet=demo.
-const DEMO_DRONE_COUNT = 20;
 const DEMO_INTERVAL_MS = 100;
 const ROOM_ID = 'local-flight-room';
 const LOCAL_DRONE_ID = 'local-drone';
+const PROFILE_STORAGE_KEY = 'drone-navigation:fleet-profiles:v2';
 const LIVE_INTERPOLATION_MS = 120;
 const LIVE_RENDER_INTERVAL_MS = 50;
 const LIVE_HEARTBEAT_MS = 5000;
@@ -21,6 +30,7 @@ const fleetMode = ref('off'); // off | demo | live
 const selectedDroneId = ref(LOCAL_DRONE_ID);
 const followSelected = ref(false);
 const sharedTarget = ref(null);
+const activeMission = ref(null);
 const drones = reactive({});
 const leases = reactive({});
 const liveConnection = reactive({
@@ -34,7 +44,7 @@ const liveConnection = reactive({
   error: '',
 });
 let demoTimer = null;
-let demoTick = 0;
+let demoMissionLastTickAt = 0;
 let liveSocket = null;
 let liveReconnectTimer = null;
 let liveReconnectDelay = 1000;
@@ -44,6 +54,7 @@ let liveLeaseTimer = null;
 let liveClosedIntentionally = false;
 let lastPingAt = 0;
 const liveTargets = new Map();
+let fleetAltitudeOrigin = Number(settings.defaultAlt) || 0;
 
 function browserClientId() {
   if (typeof window === 'undefined') return `web-${Math.random().toString(36).slice(2, 10)}`;
@@ -62,7 +73,18 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function createDrone({ droneId, name, color, x = 0, y = 0, z = 4, local = false }) {
+function createDrone({
+  droneId,
+  name,
+  color,
+  x = 0,
+  y = 0,
+  z = 0.12,
+  local = false,
+  type = 'demo',
+  agentId = '',
+  agentStatus = 'not_created',
+}) {
   return {
     droneId,
     roomId: ROOM_ID,
@@ -73,9 +95,12 @@ function createDrone({ droneId, name, color, x = 0, y = 0, z = 4, local = false 
     x,
     y,
     z,
+    homeX: x,
+    homeY: y,
+    homeZ: z,
     lat: settings.defaultLat,
     lon: settings.defaultLon,
-    alt: settings.defaultAlt,
+    alt: fleetAltitudeOrigin + z,
     roll: 0,
     pitch: 0,
     yaw: 0,
@@ -84,7 +109,42 @@ function createDrone({ droneId, name, color, x = 0, y = 0, z = 4, local = false 
     sequence: 0,
     timestamp: Date.now(),
     local,
+    type,
+    phase: 'parked',
+    missionProgress: 0,
+    missionTarget: '',
+    route: [],
+    agentId,
+    agentStatus,
   };
+}
+
+function storedProfiles() {
+  if (typeof window === 'undefined') return [];
+  try {
+    const value = JSON.parse(window.localStorage.getItem(PROFILE_STORAGE_KEY) || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistProfiles() {
+  if (typeof window === 'undefined') return;
+  const value = Object.values(drones)
+    .filter((drone) => !drone.local)
+    .map((drone) => ({
+      droneId: drone.droneId,
+      name: drone.name,
+      color: drone.color,
+      type: drone.type || 'demo',
+      homeX: Number(drone.homeX || 0),
+      homeY: Number(drone.homeY || 0),
+      homeZ: Number(drone.homeZ || 0.12),
+      agentId: drone.agentId || '',
+      agentStatus: drone.agentStatus || 'not_created',
+    }));
+  window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(value));
 }
 
 function metresToGeo(x, y) {
@@ -98,52 +158,93 @@ function metresToGeo(x, y) {
 
 function ensureLocalDrone() {
   if (!drones[LOCAL_DRONE_ID]) {
+    const home = parkingPose(0);
     drones[LOCAL_DRONE_ID] = createDrone({
       droneId: LOCAL_DRONE_ID,
       name: 'You',
       color: '#63e6be',
+      ...home,
       local: true,
+      type: 'local',
     });
   }
   return drones[LOCAL_DRONE_ID];
 }
 
-function seedDemoFleet() {
+function restoreProfiles() {
   ensureLocalDrone();
-  for (let index = 1; index <= DEMO_DRONE_COUNT; index += 1) {
-    const angle = (index / DEMO_DRONE_COUNT) * Math.PI * 2;
-    const radius = 18 + (index % 5) * 8;
+  storedProfiles().forEach((profile, profileIndex) => {
+    if (!profile?.droneId || drones[profile.droneId]) return;
+    const fallback = parkingPose(profileIndex + 1);
+    const home = {
+      x: Number(profile.homeX ?? fallback.x),
+      y: Number(profile.homeY ?? fallback.y),
+      z: Number(profile.homeZ ?? fallback.z),
+    };
+    const restored = createDrone({
+      ...profile,
+      ...home,
+      z: home.z,
+      color: profile.color || '#6dc7e8',
+    });
+    Object.assign(restored, metresToGeo(home.x, home.y));
+    drones[profile.droneId] = restored;
+  });
+}
+
+function seedDemoFleet(count = 4) {
+  ensureLocalDrone();
+  const existingRemote = Object.values(drones).filter((drone) => !drone.local).length;
+  for (let index = existingRemote + 1; index <= count; index += 1) {
     const droneId = `demo-${String(index).padStart(2, '0')}`;
+    const home = parkingPose(index);
     drones[droneId] = createDrone({
       droneId,
       name: `Scout ${String(index).padStart(2, '0')}`,
       color: index % 3 === 0 ? '#f6c453' : '#53b7ff',
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius,
-      z: 3.5 + (index % 4) * 1.3,
+      ...home,
     });
+    Object.assign(drones[droneId], metresToGeo(home.x, home.y));
   }
+  persistProfiles();
 }
 
 function tickDemoFleet() {
   if (!demoEnabled.value) return;
-  demoTick += 1;
-  Object.values(drones).forEach((drone, index) => {
-    if (drone.local) return;
-    const phase = demoTick * 0.035 + index * 0.61;
-    const orbit = 16 + (index % 5) * 8;
-    drone.x = Math.cos(phase) * orbit + Math.sin(phase * 0.7) * 4;
-    drone.y = Math.sin(phase) * orbit + Math.cos(phase * 0.6) * 4;
-    drone.z = 3.5 + (index % 4) * 1.3 + Math.sin(phase * 1.3) * 0.35;
-    drone.yaw = ((phase * 57.3 + 90) % 360 + 360) % 360;
-    drone.battery = Math.max(30, drone.battery - 0.0007);
+  const mission = activeMission.value;
+  if (!mission) return;
+  const now = Date.now();
+  const delta = demoMissionLastTickAt ? now - demoMissionLastTickAt : DEMO_INTERVAL_MS;
+  demoMissionLastTickAt = now;
+  let completeCount = 0;
+  advanceMission(mission, Object.values(drones), delta).forEach((next) => {
+    const drone = drones[next.droneId];
+    if (!drone) return;
+    const dx = next.x - drone.x;
+    const dy = next.y - drone.y;
+    if (Math.hypot(dx, dy) > 0.001) drone.yaw = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+    drone.x = next.x;
+    drone.y = next.y;
+    drone.z = next.z;
+    drone.alt = fleetAltitudeOrigin + next.z;
+    drone.phase = next.phase;
+    drone.missionProgress = next.progress;
+    drone.battery = Math.max(30, drone.battery - 0.0012);
     Object.assign(drone, metresToGeo(drone.x, drone.y));
     drone.sequence += 1;
     drone.timestamp = Date.now();
+    if (next.complete) completeCount += 1;
   });
+  if (mission.routes.length && completeCount === mission.routes.length) {
+    mission.routes.forEach((route) => {
+      const drone = drones[route.droneId];
+      if (drone) drone.route = [];
+    });
+    activeMission.value = null;
+  }
 }
 
-function setDemoEnabled(enabled) {
+function setDemoEnabled(enabled, { seedCount = 0 } = {}) {
   const next = Boolean(enabled);
   if (demoEnabled.value === next) return;
   if (next) disconnectLive();
@@ -151,17 +252,16 @@ function setDemoEnabled(enabled) {
   if (next) fleetMode.value = 'demo';
   else if (fleetMode.value === 'demo') fleetMode.value = 'off';
   if (next) {
-    seedDemoFleet();
+    restoreProfiles();
+    if (seedCount > 0) seedDemoFleet(seedCount);
     demoTimer = setInterval(tickDemoFleet, DEMO_INTERVAL_MS);
   } else {
     if (demoTimer) clearInterval(demoTimer);
     demoTimer = null;
-    Object.keys(drones).forEach((id) => {
-      if (id !== LOCAL_DRONE_ID) delete drones[id];
-    });
     selectedDroneId.value = LOCAL_DRONE_ID;
     followSelected.value = false;
     sharedTarget.value = null;
+    activeMission.value = null;
   }
 }
 
@@ -460,8 +560,23 @@ function sendLiveCommand(droneId, command) {
   });
 }
 
-function syncLocalDrone(drone) {
-  if (!demoEnabled.value || !drone) return;
+function setAltitudeOrigin(originAlt) {
+  const next = Number(originAlt);
+  if (!Number.isFinite(next) || Math.abs(next - fleetAltitudeOrigin) < 0.05) return;
+  fleetAltitudeOrigin = next;
+  Object.values(drones).forEach((item) => {
+    if (item.local) return;
+    item.alt = fleetAltitudeOrigin + Number(item.z || 0);
+    item.route = (item.route || []).map((point) => ({
+      ...point,
+      alt: fleetAltitudeOrigin + Number(point.z || 0),
+    }));
+    item.sequence += 1;
+  });
+}
+
+function syncLocalDrone(drone, originAlt = fleetAltitudeOrigin) {
+  if (!drone) return;
   const local = ensureLocalDrone();
   const lat = Number(drone.lat) || settings.defaultLat;
   const lon = Number(drone.lon) || settings.defaultLon;
@@ -475,7 +590,7 @@ function syncLocalDrone(drone) {
   local.lat = lat;
   local.lon = lon;
   local.alt = alt;
-  local.z = local.alt;
+  local.z = Math.max(0.12, local.alt - Number(originAlt || 0));
   local.yaw = yaw;
   local.sequence += 1;
   local.timestamp = Date.now();
@@ -483,6 +598,127 @@ function syncLocalDrone(drone) {
 
 function selectDrone(droneId) {
   if (drones[droneId]) selectedDroneId.value = droneId;
+}
+
+function nextDemoId() {
+  let index = 1;
+  while (drones[`demo-${String(index).padStart(2, '0')}`]) index += 1;
+  return `demo-${String(index).padStart(2, '0')}`;
+}
+
+function addDrone({ name = '', type = 'demo' } = {}) {
+  if (fleetMode.value !== 'demo') setDemoEnabled(true);
+  const droneId = nextDemoId();
+  const remoteCount = Object.values(drones).filter((drone) => !drone.local).length;
+  const home = parkingPose(remoteCount + 1);
+  const drone = createDrone({
+    droneId,
+    name: String(name || `Scout ${String(remoteCount + 1).padStart(2, '0')}`).slice(0, 40),
+    color: remoteCount % 3 === 2 ? '#f2b84b' : '#6dc7e8',
+    type: type === 'live' ? 'live' : 'demo',
+    ...home,
+  });
+  Object.assign(drone, metresToGeo(home.x, home.y));
+  drones[droneId] = drone;
+  selectedDroneId.value = droneId;
+  persistProfiles();
+  return drone;
+}
+
+function removeDrone(droneId) {
+  const drone = drones[droneId];
+  if (!drone || drone.local) return false;
+  delete drones[droneId];
+  if (selectedDroneId.value === droneId) selectedDroneId.value = LOCAL_DRONE_ID;
+  if (activeMission.value) {
+    activeMission.value = {
+      ...activeMission.value,
+      routes: activeMission.value.routes.filter((route) => route.droneId !== droneId),
+    };
+  }
+  persistProfiles();
+  return true;
+}
+
+function updateDroneAgent(droneId, patch = {}) {
+  const drone = drones[droneId];
+  if (!drone || drone.local) return false;
+  if (patch.agentId !== undefined) drone.agentId = String(patch.agentId || '');
+  if (patch.agentStatus !== undefined) drone.agentStatus = String(patch.agentStatus || 'not_created');
+  persistProfiles();
+  return true;
+}
+
+function startDemoMission(presetId = 'inspection') {
+  if (!demoEnabled.value) setDemoEnabled(true);
+  const mission = planMission(Object.values(drones), presetId);
+  if (!mission.routes.length) return false;
+  mission.routes.forEach((route) => {
+    const drone = drones[route.droneId];
+    if (!drone) return;
+    drone.route = routePolyline(route).map((point) => ({
+      ...point,
+      ...metresToGeo(point.x, point.y),
+      alt: fleetAltitudeOrigin + point.z,
+    }));
+    drone.phase = 'queued';
+    drone.missionProgress = 0;
+    drone.missionTarget = route.targetLabel;
+    drone.sequence += 1;
+  });
+  activeMission.value = mission;
+  mission.routes.forEach((route) => { route.elapsedMs = 0; });
+  demoMissionLastTickAt = Date.now();
+  return true;
+}
+
+function activatePlannedMission(mission) {
+  if (!mission?.routes?.length) return false;
+  Object.values(drones).forEach((drone) => {
+    if (drone.local) return;
+    drone.route = [];
+    drone.missionProgress = 0;
+    drone.missionTarget = '';
+    if (drone.phase !== 'parked') drone.phase = 'holding';
+  });
+  mission.routes.forEach((route) => {
+    const drone = drones[route.droneId];
+    if (!drone) return;
+    drone.route = routePolyline(route).map((point) => ({
+      ...point,
+      ...metresToGeo(point.x, point.y),
+      alt: fleetAltitudeOrigin + point.z,
+    }));
+    drone.phase = 'queued';
+    drone.missionProgress = 0;
+    drone.missionTarget = route.targetLabel;
+    drone.sequence += 1;
+    route.elapsedMs = 0;
+  });
+  activeMission.value = mission;
+  demoMissionLastTickAt = Date.now();
+  return true;
+}
+
+function navigateDroneTo(droneId, targetDroneId) {
+  if (!demoEnabled.value) setDemoEnabled(true);
+  return activatePlannedMission(planNavigateMission(Object.values(drones), droneId, targetDroneId));
+}
+
+function gatherAt(anchorDroneId = LOCAL_DRONE_ID) {
+  if (!demoEnabled.value) setDemoEnabled(true);
+  return activatePlannedMission(planGatherMission(Object.values(drones), anchorDroneId));
+}
+
+function stopDemoMission() {
+  activeMission.value = null;
+  Object.values(drones).forEach((drone) => {
+    if (drone.local) return;
+    drone.phase = drone.z <= 0.2 ? 'parked' : 'holding';
+    drone.route = [];
+    drone.missionProgress = 0;
+    drone.sequence += 1;
+  });
 }
 
 function setSharedTarget(target) {
@@ -510,21 +746,25 @@ function applyDemoCommand(droneId, action) {
   const drone = drones[droneId];
   if (!drone || !drone.online) return false;
   if (action === 'hover') {
-    // Holding position is represented by leaving the simulated trajectory
-    // untouched until its next tick.
+    drone.phase = 'holding';
   } else if (action === 'forward') {
     drone.y += 2;
+    drone.phase = 'holding';
   } else if (action === 'left') {
     drone.x -= 2;
+    drone.phase = 'holding';
   } else if (action === 'up') {
     drone.z = Math.min(12, drone.z + 1);
+    drone.phase = 'holding';
   } else if (action === 'land') {
-    drone.z = 0.5;
+    drone.z = 0.12;
     drone.online = true;
+    drone.phase = 'parked';
   } else {
     return false;
   }
   Object.assign(drone, metresToGeo(drone.x, drone.y));
+  drone.alt = fleetAltitudeOrigin + drone.z;
   drone.sequence += 1;
   drone.timestamp = Date.now();
   return true;
@@ -545,12 +785,17 @@ function buildOpenClawContext() {
     alt: Number(drone.alt.toFixed(2)),
     battery: Number(drone.battery.toFixed(1)),
     controlOwnerId: drone.controlOwnerId || null,
+    phase: drone.phase || 'unknown',
+    missionProgress: Number(drone.missionProgress || 0),
+    missionTarget: drone.missionTarget || null,
+    agentId: drone.agentId || null,
   }));
   return {
     roomId: ROOM_ID,
     localDroneId: LOCAL_DRONE_ID,
     selectedDroneId: selectedDroneId.value,
     sharedTarget: sharedTarget.value,
+    activeMissionId: activeMission.value?.id || null,
     drones: list,
   };
 }
@@ -562,7 +807,9 @@ watch(token, (value) => {
 });
 
 export function useDroneFleet() {
-  if (demoEnabled.value && !demoTimer) seedDemoFleet();
+  ensureLocalDrone();
+  restoreProfiles();
+  if (demoEnabled.value && !demoTimer) demoTimer = setInterval(tickDemoFleet, DEMO_INTERVAL_MS);
   return {
     demoEnabled: computed(() => demoEnabled.value),
     mode: computed(() => fleetMode.value),
@@ -574,6 +821,8 @@ export function useDroneFleet() {
     selectedDrone: computed(() => drones[selectedDroneId.value] || null),
     followSelected,
     sharedTarget,
+    activeMission,
+    missionPresets: MISSION_PRESETS,
     localDroneId: LOCAL_DRONE_ID,
     setDemoEnabled,
     setMode: setFleetMode,
@@ -582,8 +831,16 @@ export function useDroneFleet() {
     claimControl,
     releaseControl,
     sendLiveCommand,
+    setAltitudeOrigin,
     syncLocalDrone,
     selectDrone,
+    addDrone,
+    removeDrone,
+    updateDroneAgent,
+    startDemoMission,
+    navigateDroneTo,
+    gatherAt,
+    stopDemoMission,
     setSharedTarget,
     applyDemoCommand,
     getRenderStates,

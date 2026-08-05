@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
+import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { loadGoogleMaps } from './googleMaps.js';
 import droneIconUrl from '../../icons/drone.svg';
@@ -17,6 +17,8 @@ const props = defineProps({
   fleetDrones: { type: Array, default: () => [] },
   selectedDroneId: { type: String, default: '' },
   sharedTarget: { type: Object, default: null },
+  visible: { type: Boolean, default: true },
+  fleetOverview: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'droneSelect', 'poisFound', 'poisError', 'routeFound', 'routeError']);
@@ -56,7 +58,9 @@ let wheelHandler = null;     // stored so we can removeEventListener on unmount
 let clickListener = null;    // Google Maps click listener for picking mode
 let mapsApi = null;          // loaded Google Maps API namespace
 const fleetMarkers = new Map();
+const fleetRoutes = new Map();
 let targetMarker = null;
+let lastFleetBoundsSignature = '';
 
 function markerPosition(item) {
   const lat = Number(item?.lat);
@@ -68,7 +72,7 @@ function syncFleetMarkers() {
   if (!map.value || !mapsApi?.Marker) return;
   const activeIds = new Set();
   for (const drone of props.fleetDrones) {
-    if (!drone?.droneId || drone.droneId === props.selectedDroneId) continue;
+    if (!drone?.droneId) continue;
     const position = markerPosition(drone);
     if (!position) continue;
     activeIds.add(drone.droneId);
@@ -79,25 +83,57 @@ function syncFleetMarkers() {
         clickable: true,
         optimized: true,
         title: drone.name || drone.droneId,
-        icon: {
-          path: mapsApi.SymbolPath.CIRCLE,
-          fillColor: drone.color || '#38bdf8',
-          fillOpacity: 0.95,
-          strokeColor: '#ffffff',
-          strokeWeight: 1.5,
-          scale: 4.5,
-        },
       });
       marker.addListener('click', () => emit('droneSelect', drone.droneId));
       fleetMarkers.set(drone.droneId, marker);
     }
+    const selected = drone.droneId === props.selectedDroneId;
     marker.setPosition(position);
     marker.setOpacity(drone.online === false ? 0.35 : 1);
+    marker.setZIndex(selected ? 1000 : 100);
+    marker.setIcon({
+      path: mapsApi.SymbolPath.FORWARD_CLOSED_ARROW,
+      rotation: Number(drone.heading ?? drone.yaw ?? 0),
+      fillColor: drone.color || '#38bdf8',
+      fillOpacity: 1,
+      strokeColor: selected ? '#ffffff' : '#d9f6ff',
+      strokeWeight: selected ? 3 : 1.5,
+      scale: selected ? 6.5 : 4.5,
+    });
+
+    const routePath = (Array.isArray(drone.route) ? drone.route : [])
+      .map((point) => markerPosition(point))
+      .filter(Boolean);
+    let route = fleetRoutes.get(drone.droneId);
+    if (routePath.length >= 2) {
+      if (!route) {
+        route = new mapsApi.Polyline({
+          map: map.value,
+          clickable: false,
+          strokeColor: drone.color || '#6dc7e8',
+          strokeOpacity: 0.78,
+          strokeWeight: drone.droneId === props.selectedDroneId ? 4 : 2,
+        });
+        fleetRoutes.set(drone.droneId, route);
+      }
+      route.setPath(routePath);
+      route.setOptions({
+        strokeColor: drone.color || '#6dc7e8',
+        strokeWeight: drone.droneId === props.selectedDroneId ? 4 : 2,
+      });
+      route.setVisible(drone.phase !== 'parked');
+    } else if (route) {
+      route.setMap(null);
+      fleetRoutes.delete(drone.droneId);
+    }
   }
   for (const [droneId, marker] of fleetMarkers) {
     if (!activeIds.has(droneId)) {
       marker.setMap(null);
       fleetMarkers.delete(droneId);
+      const route = fleetRoutes.get(droneId);
+      route?.setMap(null);
+      fleetRoutes.delete(droneId);
     }
   }
 
@@ -123,6 +159,29 @@ function syncFleetMarkers() {
     }
     targetMarker.setPosition(targetPosition);
   }
+}
+
+function fitFleetBounds(force = false) {
+  if (!props.fleetOverview || !map.value || !mapsApi || !props.visible) return;
+  const positions = props.fleetDrones.map(markerPosition).filter(Boolean);
+  if (!positions.length) return;
+  const signature = props.fleetDrones
+    .filter((drone) => markerPosition(drone))
+    .map((drone) => drone.droneId)
+    .sort()
+    .join('|');
+  if (!force && signature === lastFleetBoundsSignature) return;
+  lastFleetBoundsSignature = signature;
+  if (positions.length === 1) {
+    lastProgrammaticCenter = positions[0];
+    lastProgrammaticZoom = 19;
+    map.value.setCenter(positions[0]);
+    map.value.setZoom(19);
+    return;
+  }
+  const bounds = new mapsApi.LatLngBounds();
+  positions.forEach((position) => bounds.extend(position));
+  map.value.fitBounds(bounds, { top: 56, right: 40, bottom: 54, left: 40 });
 }
 
 function altToZoom(alt) {
@@ -275,6 +334,7 @@ onMounted(async () => {
     listeners.push(mapsApi.event.addListener(map.value, 'zoom_changed', handleZoomChanged));
     attachMapClickListener();
     syncFleetMarkers();
+    fitFleetBounds(true);
 
     // Capture-phase wheel listener: fires before any Google Maps listener.
     // passive: false avoids Chrome's passive-listener console warning.
@@ -298,15 +358,19 @@ onUnmounted(() => {
   }
   fleetMarkers.forEach((marker) => marker.setMap(null));
   fleetMarkers.clear();
+  fleetRoutes.forEach((route) => route.setMap(null));
+  fleetRoutes.clear();
   targetMarker?.setMap(null);
   targetMarker = null;
 });
 
 watch(() => [props.lat, props.lon], ([lat, lon]) => {
+  if (props.fleetOverview) return;
   updateMapCenter(lat, lon);
 });
 
 watch(() => props.alt, (alt) => {
+  if (props.fleetOverview) return;
   updateMapZoom(alt);
 });
 
@@ -316,10 +380,28 @@ watch(() => props.mapTypeId, (mapTypeId) => {
   if (map.value) map.value.setMapTypeId(mapTypeId);
 });
 
+watch(() => props.visible, async (visible) => {
+  if (!visible || !map.value || !mapsApi) return;
+  await nextTick();
+  mapsApi.event.trigger(map.value, 'resize');
+  if (props.fleetOverview) fitFleetBounds(true);
+  else {
+    updateMapCenter(props.lat, props.lon);
+    updateMapZoom(props.alt);
+  }
+});
+
 watch(
   () => [props.fleetDrones, props.selectedDroneId, props.sharedTarget],
   syncFleetMarkers,
   { deep: true },
+);
+watch(
+  () => [props.fleetOverview, props.fleetDrones.map((drone) => drone.droneId).join('|')],
+  () => {
+    lastFleetBoundsSignature = '';
+    nextTick(() => fitFleetBounds(true));
+  },
 );
 
 function displayNameOf(place) {
@@ -546,6 +628,7 @@ watch(() => [props.isPicking, props.isPanelOpen], () => {
   <div class="map-view">
     <div ref="containerRef" class="map-container"></div>
     <img
+      v-if="!fleetDrones.length"
       class="drone-marker"
       :src="droneIconUrl"
       alt="Drone"

@@ -10,15 +10,13 @@ export function useCameraPhysics() {
   function step(dt, { applyMovement = true } = {}) {
     if (!applyMovement) return;
 
-    // Z -> yaw, Y -> pitch, X -> roll.
-    if (activeCameraMode.value === 'Z') {
+    // P -> natural two-axis pan/tilt, X -> optional roll trim.
+    if (activeCameraMode.value === 'P') {
       gimbal.yaw += cameraCmd.yaw * ROTATION_SPEED * dt;
-      camera.yaw = cameraCmd.yaw;
-      camera.pitch = 0;
-      camera.roll = 0;
-    } else if (activeCameraMode.value === 'Y') {
+      gimbal.yaw = ((gimbal.yaw + 540) % 360) - 180;
       gimbal.pitch += cameraCmd.pitch * ROTATION_SPEED * dt;
-      camera.yaw = 0;
+      gimbal.pitch = Math.max(-85, Math.min(45, gimbal.pitch));
+      camera.yaw = cameraCmd.yaw;
       camera.pitch = cameraCmd.pitch;
       camera.roll = 0;
     } else if (activeCameraMode.value === 'X') {

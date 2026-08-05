@@ -2,9 +2,9 @@ import { reactive, ref } from 'vue';
 
 const CAMERA_SENSITIVITY = 1;
 
-const camera = reactive({ mode: 'Z', yaw: 0, pitch: 0, roll: 0 });
-const cameraCmd = reactive({ mode: 'Z', yaw: 0, pitch: 0, roll: 0 });
-const activeCameraMode = ref('Z');
+const camera = reactive({ mode: 'P', yaw: 0, pitch: 0, roll: 0 });
+const cameraCmd = reactive({ mode: 'P', yaw: 0, pitch: 0, roll: 0 });
+const activeCameraMode = ref('P');
 const showCamera = ref(true);
 
 const pressedKeys = new Set();
@@ -24,13 +24,12 @@ function updateKeyboardInput() {
 
   if (!showCamera.value) return;
 
-  const value = (((up || left) ? -1 : 0) + ((down || right) ? 1 : 0)) * CAMERA_SENSITIVITY;
-  // Z -> yaw, Y -> pitch (inverted so up/left looks up), X -> roll.
-  if (activeCameraMode.value === 'Z') {
-    onCameraMove({ mode: 'Z', yaw: value });
-  } else if (activeCameraMode.value === 'Y') {
-    onCameraMove({ mode: 'Y', pitch: -value });
+  const yaw = ((right ? 1 : 0) - (left ? 1 : 0)) * CAMERA_SENSITIVITY;
+  const pitch = ((up ? 1 : 0) - (down ? 1 : 0)) * CAMERA_SENSITIVITY;
+  if (activeCameraMode.value === 'P') {
+    onCameraMove({ mode: 'P', yaw, pitch });
   } else if (activeCameraMode.value === 'X') {
+    const value = ((right ? 1 : 0) - (left ? 1 : 0)) * CAMERA_SENSITIVITY;
     onCameraMove({ mode: 'X', roll: value });
   }
 }
