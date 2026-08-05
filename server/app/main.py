@@ -19,6 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import CONFIG
 from .db import Base, engine
 from .drone_commands import router as drone_commands_router
+from .fleet import HUB as fleet_hub
+from .fleet import router as fleet_router
 from .matrix_auth import router as matrix_router
 from .schemas import UserCreate, UserRead, UserUpdate
 from .settings import router as settings_router
@@ -34,7 +36,9 @@ async def lifespan(app: FastAPI):
     # Create tables on startup (fine for v1; Alembic when the schema evolves).
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await fleet_hub.start()
     yield
+    await fleet_hub.stop()
 
 
 app = FastAPI(title="Drone Navigation API", lifespan=lifespan)
@@ -106,6 +110,9 @@ app.include_router(telemetry_router, prefix="/api")
 
 # --- Real drone: flight commands (WS /api/drone/command[/downlink]) ----------
 app.include_router(drone_commands_router, prefix="/api")
+
+# --- Multi-drone collaboration rooms + lease-guarded command routing --------
+app.include_router(fleet_router, prefix="/api")
 
 
 @app.get("/api/health")

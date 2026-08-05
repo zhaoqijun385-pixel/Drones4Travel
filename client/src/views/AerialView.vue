@@ -37,6 +37,8 @@ const fleet = useDroneFleet();
 const fleetDemoRequested = isFleetDemoRequested();
 fleet.setDemoEnabled(fleetDemoRequested);
 const fleetDemoEnabled = fleet.demoEnabled;
+const fleetEnabled = computed(() => fleet.mode.value !== 'off');
+const fleetLiveEnabled = fleet.liveEnabled;
 const fleetDroneRows = computed(() => fleet.drones.value.map((item) => {
   const latScale = 111_320;
   const lonScale = latScale * Math.max(0.2, Math.cos((drone.lat * Math.PI) / 180));
@@ -57,8 +59,8 @@ const localSituationDrone = computed(() => ({
   online: true,
   local: true,
 }));
-const situationDrones = computed(() => (fleetDemoEnabled.value ? fleetDroneRows.value : [localSituationDrone.value]));
-const situationSelectedDroneId = computed(() => (fleetDemoEnabled.value ? fleet.selectedDroneId.value : fleet.localDroneId));
+const situationDrones = computed(() => (fleetEnabled.value ? fleetDroneRows.value : [localSituationDrone.value]));
+const situationSelectedDroneId = computed(() => (fleetEnabled.value ? fleet.selectedDroneId.value : fleet.localDroneId));
 const situationSelectedDrone = computed(() =>
   situationDrones.value.find((item) => item.droneId === situationSelectedDroneId.value) || situationDrones.value[0] || null,
 );
@@ -86,7 +88,7 @@ const {
 });
 
 async function syncFleetToOpenClaw() {
-  if (!fleetDemoEnabled.value) return;
+  if (!fleetEnabled.value) return;
   if (!openClawConnected.value) {
     openClawSyncState.value = 'unavailable';
     return;
@@ -109,7 +111,7 @@ function selectFleetDrone(droneId) {
 }
 
 function selectSituationDrone(droneId) {
-  if (fleetDemoEnabled.value) selectFleetDrone(droneId);
+  if (fleetEnabled.value) selectFleetDrone(droneId);
 }
 
 function syncSituationPanelItem() {
@@ -142,21 +144,43 @@ function toggleFleetFollow() {
 function syncFleetToggleItem() {
   const item = leftItems.find((entry) => entry.id === 'fleet-toggle');
   if (!item) return;
-  item.active = fleetDemoEnabled.value;
-  item.titleKey = fleetDemoEnabled.value
+  item.active = fleetEnabled.value;
+  item.titleKey = fleetEnabled.value
     ? 'aerialview.fleet_disable'
     : 'aerialview.fleet_enable';
 }
 
 function toggleFleetMode() {
-  const enabled = !fleetDemoEnabled.value;
-  fleet.setDemoEnabled(enabled);
+  const enabled = !fleetEnabled.value;
+  fleet.setMode(enabled ? 'demo' : 'off');
   if (!enabled) {
     closeOpenClaw();
     fleet.followSelected.value = false;
     if (typeof window.clearDroneFleet === 'function') window.clearDroneFleet();
   }
   syncFleetToggleItem();
+}
+
+function activateDemoFleet() {
+  fleet.setMode('demo');
+  syncFleetToggleItem();
+}
+
+function activateLiveFleet() {
+  fleet.setMode('live', { roomId: fleet.liveConnection.roomId || 'local-flight-room' });
+  syncFleetToggleItem();
+}
+
+const selectedFleetLease = computed(() => fleet.leases[fleet.selectedDroneId.value] || null);
+const ownsSelectedFleetLease = computed(() => (
+  selectedFleetLease.value?.ownerClientId === fleet.liveConnection.clientId
+));
+
+function toggleSelectedControlLease() {
+  const droneId = fleet.selectedDroneId.value;
+  if (!droneId) return;
+  if (ownsSelectedFleetLease.value) fleet.releaseControl(droneId);
+  else fleet.claimControl(droneId);
 }
 
 const commandLabelKeys = {
@@ -174,12 +198,17 @@ function toggleOpenClawPanel() {
 
 function prepareDroneCommand(action) {
   const selected = fleet.selectedDrone.value;
-  if (!fleetDemoEnabled.value || !selected) {
+  if (!fleetEnabled.value || !selected) {
     openClawCommandNotice.value = t('aerialview.openclaw_enable_fleet_first');
     return;
   }
   if (selected.local) {
     openClawCommandNotice.value = t('aerialview.openclaw_remote_only');
+    return;
+  }
+  if (fleetLiveEnabled.value && !ownsSelectedFleetLease.value) {
+    fleet.claimControl(selected.droneId);
+    openClawCommandNotice.value = t('aerialview.fleet_control_requesting');
     return;
   }
   pendingDroneCommand.value = {
@@ -194,7 +223,16 @@ function prepareDroneCommand(action) {
 function confirmDroneCommand() {
   const command = pendingDroneCommand.value;
   if (!command) return;
-  const applied = fleet.applyDemoCommand(command.droneId, command.action);
+  const liveCommands = {
+    hover: { action: 'move', vx: 0, vy: 0, vz: 0, yawrate: 0 },
+    forward: { action: 'forward', distance: 0.2 },
+    left: { action: 'left', distance: 0.2 },
+    up: { action: 'up', distance: 0.2 },
+    land: { action: 'land' },
+  };
+  const applied = fleetLiveEnabled.value
+    ? fleet.sendLiveCommand(command.droneId, liveCommands[command.action])
+    : fleet.applyDemoCommand(command.droneId, command.action);
   pendingDroneCommand.value = null;
   openClawCommandNotice.value = applied
     ? t('aerialview.openclaw_demo_command_sent', { drone: command.droneName, command: command.label })
@@ -789,7 +827,7 @@ let fleetPerfTs = 0;
 let fleetStateSignature = '';
 
 function updateFleetLayer(now) {
-  if (!fleetDemoEnabled.value) return;
+  if (!fleetEnabled.value) return;
   fleetFrameCount += 1;
   if (now - fleetRenderTs < 50) return; // cap fleet writes at 20 Hz
   fleetRenderTs = now;
@@ -972,8 +1010,8 @@ onMounted(() => {
   registerLeft({
     id: 'fleet-toggle',
     icon: 'MENU_DRONE_PLUS',
-    titleKey: fleetDemoEnabled.value ? 'aerialview.fleet_disable' : 'aerialview.fleet_enable',
-    active: fleetDemoEnabled.value,
+    titleKey: fleetEnabled.value ? 'aerialview.fleet_disable' : 'aerialview.fleet_enable',
+    active: fleetEnabled.value,
     onClick: toggleFleetMode,
   });
   registerLeft({
@@ -1031,7 +1069,7 @@ onMounted(() => {
     const item = leftItems.find((i) => i.id === 'camera');
     if (item) item.active = val;
   });
-  watch(fleetDemoEnabled, syncFleetToggleItem);
+  watch(fleetEnabled, syncFleetToggleItem);
   watch(openClawPanelOpen, (val) => {
     const item = leftItems.find((entry) => entry.id === 'openclaw-float');
     if (item) item.active = val;
@@ -1108,8 +1146,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   resetRecorder();
-  if (fleetDemoEnabled.value) {
-    fleet.setDemoEnabled(false);
+  if (fleetEnabled.value) {
+    fleet.setMode('off');
     if (typeof window.clearDroneFleet === 'function') window.clearDroneFleet();
   }
   stopFlightKeyboard();
@@ -1179,7 +1217,7 @@ onUnmounted(() => {
         :drones="fleetDroneRows"
         :selected-drone-id="fleet.selectedDroneId.value"
         :selected-drone="fleet.selectedDrone.value"
-        :fleet-enabled="fleetDemoEnabled"
+        :fleet-enabled="fleetEnabled"
         :pending-command="pendingDroneCommand"
         :notice="openClawCommandNotice"
         @close="openClawPanelOpen = false"
@@ -1190,20 +1228,29 @@ onUnmounted(() => {
         @confirm-command="confirmDroneCommand"
         @cancel-command="cancelDroneCommand"
       />
-      <section v-if="fleetDemoEnabled" class="fleet-panel" aria-label="Multi-drone flight deck">
+      <section v-if="fleetEnabled" class="fleet-panel" aria-label="Multi-drone flight deck">
         <header class="fleet-panel__header">
           <div>
             <span class="fleet-panel__eyebrow">{{ t('aerialview.fleet_mode') }}</span>
             <strong>{{ t('aerialview.fleet_title') }}</strong>
           </div>
-          <span class="fleet-panel__status" :class="`fleet-panel__status--${openClawStatus}`">
-            {{ openClawConnected ? t('aerialview.openclaw_connected') : t('aerialview.openclaw_offline') }}
+          <span class="fleet-panel__status" :class="`fleet-panel__status--${fleet.liveConnection.status}`">
+            {{ fleetLiveEnabled ? t(`aerialview.fleet_live_${fleet.liveConnection.status}`) : t('aerialview.fleet_demo') }}
           </span>
         </header>
+        <div class="fleet-panel__mode-switch">
+          <button type="button" :class="{ 'is-active': fleetDemoEnabled }" @click="activateDemoFleet">
+            {{ t('aerialview.fleet_demo') }}
+          </button>
+          <button type="button" :class="{ 'is-active': fleetLiveEnabled }" @click="activateLiveFleet">
+            {{ t('aerialview.fleet_live') }}
+          </button>
+        </div>
         <div class="fleet-panel__metrics">
           <span><b>{{ fleetDroneRows.length }}</b> {{ t('aerialview.fleet_drones') }}</span>
           <span><b>{{ fleetPerformance.visible }}</b> {{ t('aerialview.fleet_visible') }}</span>
           <span><b>{{ fleetPerformance.fps || 0 }}</b> FPS</span>
+          <span v-if="fleetLiveEnabled"><b>{{ fleet.liveConnection.latencyMs ?? '–' }}</b> ms</span>
         </div>
         <div class="fleet-panel__actions">
           <button type="button" @click="toggleFleetFollow">
@@ -1211,6 +1258,9 @@ onUnmounted(() => {
           </button>
           <button type="button" :disabled="!openClawConnected || openClawSyncState === 'syncing'" @click="syncFleetToOpenClaw">
             {{ openClawSyncState === 'syncing' ? t('aerialview.openclaw_syncing') : t('aerialview.openclaw_sync') }}
+          </button>
+          <button v-if="fleetLiveEnabled && fleet.selectedDrone.value" type="button" @click="toggleSelectedControlLease">
+            {{ ownsSelectedFleetLease ? t('aerialview.fleet_release_control') : t('aerialview.fleet_claim_control') }}
           </button>
         </div>
         <div class="fleet-panel__list">
@@ -1227,7 +1277,9 @@ onUnmounted(() => {
             <span class="fleet-panel__drone-meta">{{ item.battery.toFixed(0) }}% · {{ item.distance.toFixed(0) }}m</span>
           </button>
         </div>
-        <p class="fleet-panel__hint">{{ t('aerialview.fleet_demo_hint') }}</p>
+        <p class="fleet-panel__hint">
+          {{ fleetLiveEnabled ? t('aerialview.fleet_live_hint') : t('aerialview.fleet_demo_hint') }}
+        </p>
       </section>
       <CollisionWarning :visible="isCollisionFrozen" />
       <div v-if="collisionPausedMessage" class="top-center-message top-center-message--warning">
@@ -1354,11 +1406,39 @@ onUnmounted(() => {
 }
 
 .fleet-panel__status--connecting,
+.fleet-panel__status--reconnecting,
+.fleet-panel__status--auth_required,
 .fleet-panel__status--closed,
 .fleet-panel__status--error,
 .fleet-panel__status--idle {
   color: #f8d789;
   background: rgba(234, 179, 8, 0.14);
+}
+
+.fleet-panel__mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fleet-panel__mode-switch button {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(206, 228, 242, 0.68);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.66rem;
+}
+
+.fleet-panel__mode-switch button.is-active {
+  background: rgba(83, 183, 255, 0.2);
+  color: #e8f7ff;
 }
 
 .fleet-panel__metrics {

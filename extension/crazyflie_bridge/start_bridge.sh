@@ -21,6 +21,11 @@
 #   TELEMETRY_SERVER     — e.g. ws://127.0.0.1:8000/api/drone/telemetry/publish
 #                          (default: PRODUCTION wss://drone-navigation.com/...)
 #   TELEMETRY_TOKEN      — must match server config "drone.telemetry_token" if set
+#   FLEET_DRONE_ID       — enables multi-drone room publishing, e.g. cf-01
+#   FLEET_ROOM_ID        — collaboration room (default: local-flight-room)
+#   FLEET_DRONE_NAME     — display name for this drone
+#   FLEET_STREAM_ID      — MediaMTX stream mapped to this drone
+#   FLEET_SERVER         — optional /api/fleet/publish endpoint override
 #   MEDIAMTX_URL         — e.g. http://127.0.0.1:8889 (default: PRODUCTION)
 #   MEDIAMTX_API         — e.g. http://127.0.0.1:9997 (default: PRODUCTION)
 #   LIVESTREAM_ID        — MediaMTX stream id (default: crazyflie-drone)
@@ -72,6 +77,9 @@ echo "[Launcher] WebSocket:     ws://localhost:8765"
 echo "[Launcher] Telemetry ->   ${TELEMETRY_SERVER:-wss://drone-navigation.com/api/drone/telemetry/publish}"
 echo "[Launcher] Radio URI:    ${RADIO_URL:-radio://0/80/2M/E7E7E7E7E7 (default)}"
 echo "[Launcher] WHIP ingest -> ${MEDIAMTX_URL:-https://drone-navigation.com/live} (id ${LIVESTREAM_ID:-crazyflie-drone})"
+if [ -n "${FLEET_DRONE_ID:-}" ]; then
+  echo "[Launcher] Fleet room:     ${FLEET_ROOM_ID:-local-flight-room}/${FLEET_DRONE_ID}"
+fi
 
 PIDS=()
 cleanup() {

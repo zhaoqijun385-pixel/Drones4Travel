@@ -1,0 +1,15 @@
+roomId: local-flight-room
+fleetServer: ws://127.0.0.1:8000/api/fleet/publish
+drones:
+  - droneId: cf-01
+    name: Crazyflie 01
+    uri: radio://0/80/2M/E7E7E7E701
+    port: 8765
+    streamId: crazyflie-cf-01
+    enabled: false
+  - droneId: cf-02
+    name: Crazyflie 02
+    uri: radio://1/80/2M/E7E7E7E702
+    port: 8766
+    streamId: crazyflie-cf-02
+    enabled: false
