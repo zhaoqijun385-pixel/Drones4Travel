@@ -60,6 +60,8 @@ function onDividerPointerUp() {
 
 /* ─── Sidebar navigation ─── */
 const selectedNav = ref('chat');
+const conversationSearch = ref('');
+const contactSearch = ref('');
 
 /* ─── Composer ─── */
 const input = ref('');
@@ -134,6 +136,11 @@ async function startDm(entry) {
   scrollToBottom();
 }
 
+async function openContactChat(entry) {
+  selectedNav.value = 'chat';
+  await startDm(entry);
+}
+
 async function createTeam() {
   if (!teamName.value.trim() || !teamSelection.value.length) return;
   const entries = [...teamSelection.value];
@@ -169,6 +176,22 @@ const typingText = computed(() => {
   return t('chatview.typing_many', { names: names.join(', ') });
 });
 
+function filterRooms(list, query) {
+  const normalized = (query || '').trim().toLocaleLowerCase();
+  if (!normalized) return list;
+  return list.filter((room) => `${room.name} ${room.preview}`.toLocaleLowerCase().includes(normalized));
+}
+
+const filteredDms = computed(() => filterRooms(dms.value, conversationSearch.value));
+const filteredTeamRooms = computed(() => filterRooms(teamRooms.value, conversationSearch.value));
+const filteredDirectory = computed(() => {
+  const normalized = contactSearch.value.trim().toLocaleLowerCase();
+  if (!normalized) return directory.value;
+  return directory.value.filter((entry) => `${entry.display_name} ${entry.mxid}`.toLocaleLowerCase().includes(normalized));
+});
+const unreadTotal = computed(() => [...dms.value, ...teamRooms.value]
+  .reduce((total, room) => total + (room.unreadCount || 0), 0));
+
 onMounted(() => {
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
@@ -198,7 +221,7 @@ onMounted(() => {
     icon: 'MENU_CONTACTS',
     titleKey: 'chatview.nav_contacts',
     active: computed(() => selectedNav.value === 'contacts'),
-    onClick: () => { selectedNav.value = 'contacts'; },
+    onClick: () => { selectedNav.value = 'contacts'; fetchDirectory(); },
   });
   registerLeft({
     id: 'gallery',
@@ -280,6 +303,17 @@ onUnmounted(() => {
         >
           <!-- Chat: room list -->
           <template v-if="selectedNav === 'chat'">
+            <div class="sidebar-heading">
+              <div>
+                <span class="sidebar-kicker">{{ t('chatview.conversations') }}</span>
+                <span v-if="unreadTotal" class="sidebar-unread-total">{{ unreadTotal }}</span>
+              </div>
+              <span class="sidebar-count">{{ dms.length + teamRooms.length }}</span>
+            </div>
+            <label class="sidebar-search">
+              <ConfigurableIcon name="CHAT_SEARCH" :size="16" />
+              <input v-model="conversationSearch" :placeholder="t('chatview.search_conversations')" />
+            </label>
             <div class="sidebar-actions">
               <button class="sidebar-action" :disabled="!chatReady" @click="openDialog('dm')">
                 + {{ t('chatview.new_chat') }}
@@ -292,7 +326,7 @@ onUnmounted(() => {
             <div v-if="dms.length" class="room-section">
               <h3 class="room-section-title">{{ t('chatview.direct_messages') }}</h3>
               <button
-                v-for="room in dms"
+                v-for="room in filteredDms"
                 :key="room.roomId"
                 class="room-item"
                 :class="{ 'room-item--active': room.roomId === activeRoomId }"
@@ -304,13 +338,14 @@ onUnmounted(() => {
                   <span class="room-preview">{{ room.preview }}</span>
                 </span>
                 <span class="room-time">{{ dayFmt(room.lastTs) }}</span>
+                <span v-if="room.unreadCount" class="room-unread">{{ room.unreadCount > 99 ? '99+' : room.unreadCount }}</span>
               </button>
             </div>
 
             <div v-if="teamRooms.length" class="room-section">
               <h3 class="room-section-title">{{ t('chatview.team_rooms') }}</h3>
               <button
-                v-for="room in teamRooms"
+                v-for="room in filteredTeamRooms"
                 :key="room.roomId"
                 class="room-item"
                 :class="{ 'room-item--active': room.roomId === activeRoomId }"
@@ -322,22 +357,45 @@ onUnmounted(() => {
                   <span class="room-preview">{{ room.preview || t('chatview.members_count', { count: room.members }) }}</span>
                 </span>
                 <span class="room-time">{{ dayFmt(room.lastTs) }}</span>
+                <span v-if="room.unreadCount" class="room-unread">{{ room.unreadCount > 99 ? '99+' : room.unreadCount }}</span>
               </button>
             </div>
 
-            <p v-if="chatReady && !dms.length && !teamRooms.length" class="sidebar-empty">
+            <p v-if="chatReady && !filteredDms.length && !filteredTeamRooms.length" class="sidebar-empty">
               {{ t('chatview.no_conversations') }}
             </p>
           </template>
 
-          <!-- Contacts stub (untouched for now) -->
-          <p v-else-if="selectedNav === 'contacts'" class="sidebar-empty">
-            {{ t('chatview.contacts_stub') }}
-          </p>
+          <!-- Contacts -->
+          <template v-else-if="selectedNav === 'contacts'">
+            <div class="sidebar-heading">
+              <span class="sidebar-kicker">{{ t('chatview.contacts') }}</span>
+              <span class="sidebar-count">{{ directory.length }}</span>
+            </div>
+            <label class="sidebar-search">
+              <ConfigurableIcon name="CHAT_SEARCH" :size="16" />
+              <input v-model="contactSearch" :placeholder="t('chatview.search_contacts')" />
+            </label>
+            <button
+              v-for="entry in filteredDirectory"
+              :key="entry.mxid"
+              class="contact-item"
+              @click="openContactChat(entry)"
+            >
+              <span class="room-avatar">{{ initials(entry.display_name) }}</span>
+              <span class="room-meta">
+                <span class="room-name">{{ entry.display_name }}</span>
+                <span class="room-preview">{{ t('chatview.start_conversation') }}</span>
+              </span>
+            </button>
+            <p v-if="!filteredDirectory.length" class="sidebar-empty">
+              {{ t('chatview.no_contacts') }}
+            </p>
+          </template>
 
-          <!-- Gallery stub (untouched for now) -->
+          <!-- Gallery -->
           <p v-else-if="selectedNav === 'gallery'" class="sidebar-empty">
-            {{ t('chatview.gallery_stub') }}
+            {{ t('chatview.gallery_hint') }}
           </p>
         </aside>
 
@@ -349,6 +407,56 @@ onUnmounted(() => {
 
         <!-- Right content area -->
         <main class="community-content">
+          <template v-if="selectedNav === 'contacts'">
+            <header class="chat-header">
+              <div>
+                <h1 class="chat-header-title">{{ t('chatview.contacts') }}</h1>
+                <p class="chat-header-subtitle">{{ t('chatview.contacts_hint') }}</p>
+              </div>
+              <span class="chat-status">{{ directory.length }}</span>
+            </header>
+            <div v-if="!isAuthenticated" class="chat-empty">
+              <p>{{ t('chatview.login_required') }}</p>
+            </div>
+            <div v-else class="contacts-content">
+              <label class="content-search">
+                <ConfigurableIcon name="CHAT_SEARCH" :size="17" />
+                <input v-model="contactSearch" :placeholder="t('chatview.search_contacts')" />
+              </label>
+              <div v-if="filteredDirectory.length" class="contacts-list">
+                <button
+                  v-for="entry in filteredDirectory"
+                  :key="entry.mxid"
+                  class="contact-card"
+                  @click="openContactChat(entry)"
+                >
+                  <span class="contact-card__avatar">{{ initials(entry.display_name) }}</span>
+                  <span class="contact-card__meta">
+                    <strong>{{ entry.display_name }}</strong>
+                    <small>{{ t('chatview.start_conversation') }}</small>
+                  </span>
+                  <span class="contact-card__action">{{ t('chatview.chat_now') }}</span>
+                </button>
+              </div>
+              <div v-else class="chat-empty chat-empty--inline">
+                <p>{{ t('chatview.no_contacts') }}</p>
+              </div>
+            </div>
+          </template>
+          <template v-else-if="selectedNav === 'gallery'">
+            <header class="chat-header">
+              <div>
+                <h1 class="chat-header-title">{{ t('chatview.nav_gallery') }}</h1>
+                <p class="chat-header-subtitle">{{ t('chatview.gallery_hint') }}</p>
+              </div>
+            </header>
+            <div class="gallery-empty">
+              <div class="gallery-empty__icon">▧</div>
+              <h2>{{ t('chatview.gallery_title') }}</h2>
+              <p>{{ t('chatview.gallery_description') }}</p>
+            </div>
+          </template>
+          <template v-else>
           <!-- Login gate: same green-banner pattern as the Save/capture gates -->
           <template v-if="!isAuthenticated">
             <div class="chat-notice chat-notice--green">
@@ -429,6 +537,7 @@ onUnmounted(() => {
                 </button>
               </footer>
             </template>
+          </template>
           </template>
         </main>
 
@@ -1017,5 +1126,279 @@ onUnmounted(() => {
 .btn-create:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ─── WeChat-like navigation and contact surfaces ─── */
+.sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 16px 8px;
+}
+
+.sidebar-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-kicker {
+  color: #1d1d1f;
+  font-size: 0.95rem;
+  font-weight: 750;
+}
+
+.sidebar-count {
+  color: #9ca3af;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-unread-total,
+.room-unread {
+  min-width: 18px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 0.65rem;
+  font-weight: 750;
+  line-height: 1.2;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-search,
+.content-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9ca3af;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(209, 213, 219, 0.85);
+  border-radius: 9px;
+}
+
+.sidebar-search {
+  margin: 0 12px 8px;
+  padding: 7px 10px;
+}
+
+.sidebar-search input,
+.content-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #1d1d1f;
+  font-size: 0.78rem;
+}
+
+.content-search {
+  max-width: 420px;
+  margin-bottom: 20px;
+  padding: 10px 12px;
+}
+
+.sidebar-search:focus-within,
+.content-search:focus-within {
+  border-color: rgba(59, 130, 246, 0.7);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.room-unread {
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.contact-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 16px);
+  margin: 2px 8px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.contact-item:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.chat-header > div {
+  min-width: 0;
+}
+
+.chat-header-subtitle {
+  margin: 3px 0 0;
+  color: #8a8a8f;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.contacts-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px clamp(20px, 5vw, 56px);
+}
+
+.contacts-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.contact-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(229, 231, 235, 0.95);
+  border-radius: 14px;
+  background: rgba(249, 250, 251, 0.78);
+  color: #1d1d1f;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.contact-card:hover {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: #ffffff;
+  transform: translateY(-1px);
+}
+
+.contact-card__avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  color: #ffffff;
+  font-weight: 750;
+}
+
+.contact-card__meta {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.contact-card__meta strong,
+.contact-card__meta small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-card__meta strong {
+  font-size: 0.88rem;
+}
+
+.contact-card__meta small {
+  color: #8a8a8f;
+  font-size: 0.72rem;
+}
+
+.contact-card__action {
+  color: #2563eb;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.chat-empty--inline {
+  min-height: 220px;
+}
+
+.gallery-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  text-align: center;
+  color: #6e6e73;
+}
+
+.gallery-empty__icon {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  margin-bottom: 16px;
+  border-radius: 18px;
+  background: #eef2ff;
+  color: #4f46e5;
+  font-size: 2rem;
+}
+
+.gallery-empty h2 {
+  margin: 0 0 8px;
+  color: #1d1d1f;
+  font-size: 1.05rem;
+}
+
+.gallery-empty p {
+  max-width: 420px;
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+@media (max-width: 760px) {
+  .community-page {
+    padding: 0 56px;
+  }
+
+  .community-sidebar {
+    flex-basis: 42% !important;
+  }
+
+  .sidebar-actions {
+    flex-direction: column;
+  }
+
+  .chat-header,
+  .chat-inputbar {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .messages {
+    padding: 16px 14px;
+  }
+
+  .message-bubble {
+    max-width: 82%;
+  }
+
+  .contacts-content {
+    padding: 20px 14px;
+  }
+
+  .contacts-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .contact-card {
+    transition: none;
+  }
 }
 </style>

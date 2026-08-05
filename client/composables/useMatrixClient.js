@@ -11,11 +11,13 @@
  * re-bootstraps on login, so chat follows the website account automatically.
  */
 import { computed, ref, watch } from 'vue';
-import * as sdk from 'matrix-js-sdk';
 import { useAuth } from '@shared-composables/useAuth.js';
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
 const CRED_KEY = 'drone.matrix.creds';
+const DIRECTORY_KEY = 'drone.matrix.directory.v1';
+const DIRECTORY_TTL = 5 * 60 * 1000;
+const MAX_TIMELINE_EVENTS = 240;
 
 /* Reactive state shared by every component instance. */
 const ready = ref(false);
@@ -29,6 +31,14 @@ const directory = ref([]); // chat-addressable site users (display_name+mxid)
 
 let client = null;
 let bootPromise = null;
+let directoryRequest = null;
+let matrixSdkPromise = null;
+const roomSummaryCache = new Map();
+
+function loadMatrixSdk() {
+  if (!matrixSdkPromise) matrixSdkPromise = import('matrix-js-sdk');
+  return matrixSdkPromise;
+}
 
 /* ─── Credentials ─── */
 async function fetchCreds() {
@@ -87,18 +97,38 @@ function refreshRooms() {
   const list = [];
   for (const room of client.getRooms()) {
     if (room.getMyMembership() !== 'join') continue;
+    const lastTs = room.getLastActiveTimestamp();
+    const roomName = room.name || '…';
+    const events = room.getLiveTimeline().getEvents();
+    const eventCount = events.length;
+    const cached = roomSummaryCache.get(room.roomId);
+    const preview = cached
+      && cached.lastTs === lastTs
+      && cached.eventCount === eventCount
+      && cached.name === roomName
+      ? cached.preview
+      : lastTextOf(room);
+    const unreadCount = typeof room.getUnreadNotificationCount === 'function'
+      ? room.getUnreadNotificationCount()
+      : 0;
+    roomSummaryCache.set(room.roomId, {
+      lastTs,
+      eventCount,
+      name: roomName,
+      preview,
+    });
     list.push({
       roomId: room.roomId,
-      name: room.name || '…',
+      name: roomName,
       isDm: isDmRoom(room, dmIds),
       members: room.getJoinedMemberCount(),
-      preview: lastTextOf(room),
-      lastTs: room.getLastActiveTimestamp(),
+      preview,
+      lastTs,
+      unreadCount,
     });
   }
   list.sort((a, b) => b.lastTs - a.lastTs);
   rooms.value = list;
-  if (activeRoomId.value) refreshTimeline();
 }
 
 function updateTyping(room) {
@@ -117,7 +147,11 @@ function refreshTimeline() {
   if (!room) { timeline.value = []; return; }
   const me = client.getUserId();
   const msgs = [];
-  for (const ev of room.getLiveTimeline().getEvents()) {
+  const events = room.getLiveTimeline().getEvents();
+  const visibleEvents = events.length > MAX_TIMELINE_EVENTS
+    ? events.slice(-MAX_TIMELINE_EVENTS)
+    : events;
+  for (const ev of visibleEvents) {
     if (ev.getType() !== 'm.room.message') continue;
     const content = ev.getContent() || {};
     if (content.msgtype !== 'm.text' || typeof content.body !== 'string') continue;
@@ -178,6 +212,7 @@ async function bootstrap() {
     try {
       error.value = '';
       const creds = await fetchCreds();
+      const sdk = await loadMatrixSdk();
       const c = sdk.createClient({
         baseUrl: window.location.origin, // same-origin /_matrix proxy
         accessToken: creds.access_token,
@@ -227,6 +262,10 @@ function teardown() {
   activeRoomId.value = '';
   timeline.value = [];
   typingNames.value = [];
+  directory.value = [];
+  sessionStorage.removeItem(DIRECTORY_KEY);
+  roomSummaryCache.clear();
+  directoryRequest = null;
 }
 
 /** Kept for API compatibility; the lockstep watch is module-level (below). */
@@ -308,12 +347,33 @@ async function createTeamRoom(name, entries) {
 async function fetchDirectory() {
   const { token } = useAuth();
   if (!token.value) { directory.value = []; return; }
+  let cached = null;
   try {
-    const res = await fetch(`${API_BASE}/api/directory/users`, {
-      headers: { Authorization: `Bearer ${token.value}` },
-    });
-    directory.value = res.ok ? await res.json() : [];
-  } catch { directory.value = []; }
+    cached = JSON.parse(sessionStorage.getItem(DIRECTORY_KEY) || 'null');
+  } catch { /* ignore malformed cache */ }
+  if (Array.isArray(cached?.items)) {
+    directory.value = cached.items;
+    if (Date.now() - Number(cached.savedAt || 0) < DIRECTORY_TTL) return directory.value;
+  }
+  if (directoryRequest) return directoryRequest;
+  directoryRequest = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/directory/users`, {
+        headers: { Authorization: `Bearer ${token.value}` },
+      });
+      if (res.ok) {
+        const items = await res.json();
+        directory.value = Array.isArray(items) ? items : [];
+        sessionStorage.setItem(DIRECTORY_KEY, JSON.stringify({
+          savedAt: Date.now(),
+          items: directory.value,
+        }));
+      }
+    } catch { /* keep stale directory available while offline */ }
+    finally { directoryRequest = null; }
+    return directory.value;
+  })();
+  return directoryRequest;
 }
 
 const dms = computed(() => rooms.value.filter((r) => r.isDm));
