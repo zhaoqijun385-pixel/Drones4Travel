@@ -14,9 +14,12 @@ const props = defineProps({
   mapTypeId: { type: String, default: 'roadmap' },
   isPicking: { type: Boolean, default: false },
   isPanelOpen: { type: Boolean, default: false },
+  fleetDrones: { type: Array, default: () => [] },
+  selectedDroneId: { type: String, default: '' },
+  sharedTarget: { type: Object, default: null },
 });
 
-const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError']);
+const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'droneSelect', 'poisFound', 'poisError', 'routeFound', 'routeError']);
 
 const containerRef = ref(null);
 const map = ref(null);
@@ -52,6 +55,75 @@ let listeners = [];
 let wheelHandler = null;     // stored so we can removeEventListener on unmount
 let clickListener = null;    // Google Maps click listener for picking mode
 let mapsApi = null;          // loaded Google Maps API namespace
+const fleetMarkers = new Map();
+let targetMarker = null;
+
+function markerPosition(item) {
+  const lat = Number(item?.lat);
+  const lng = Number(item?.lon);
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+}
+
+function syncFleetMarkers() {
+  if (!map.value || !mapsApi?.Marker) return;
+  const activeIds = new Set();
+  for (const drone of props.fleetDrones) {
+    if (!drone?.droneId || drone.droneId === props.selectedDroneId) continue;
+    const position = markerPosition(drone);
+    if (!position) continue;
+    activeIds.add(drone.droneId);
+    let marker = fleetMarkers.get(drone.droneId);
+    if (!marker) {
+      marker = new mapsApi.Marker({
+        map: map.value,
+        clickable: true,
+        optimized: true,
+        title: drone.name || drone.droneId,
+        icon: {
+          path: mapsApi.SymbolPath.CIRCLE,
+          fillColor: drone.color || '#38bdf8',
+          fillOpacity: 0.95,
+          strokeColor: '#ffffff',
+          strokeWeight: 1.5,
+          scale: 4.5,
+        },
+      });
+      marker.addListener('click', () => emit('droneSelect', drone.droneId));
+      fleetMarkers.set(drone.droneId, marker);
+    }
+    marker.setPosition(position);
+    marker.setOpacity(drone.online === false ? 0.35 : 1);
+  }
+  for (const [droneId, marker] of fleetMarkers) {
+    if (!activeIds.has(droneId)) {
+      marker.setMap(null);
+      fleetMarkers.delete(droneId);
+    }
+  }
+
+  const targetPosition = markerPosition(props.sharedTarget);
+  if (!targetPosition) {
+    targetMarker?.setMap(null);
+    targetMarker = null;
+  } else {
+    if (!targetMarker) {
+      targetMarker = new mapsApi.Marker({
+        map: map.value,
+        clickable: false,
+        title: 'Shared target',
+        icon: {
+          path: mapsApi.SymbolPath.BACKWARD_CLOSED_ARROW,
+          fillColor: '#f59e0b',
+          fillOpacity: 1,
+          strokeColor: '#fff7ed',
+          strokeWeight: 2,
+          scale: 7,
+        },
+      });
+    }
+    targetMarker.setPosition(targetPosition);
+  }
+}
 
 function altToZoom(alt) {
   const clamped = Math.max(MIN_ALT, Math.min(MAX_ALT, alt));
@@ -202,6 +274,7 @@ onMounted(async () => {
     listeners.push(mapsApi.event.addListener(map.value, 'center_changed', handleCenterChanged));
     listeners.push(mapsApi.event.addListener(map.value, 'zoom_changed', handleZoomChanged));
     attachMapClickListener();
+    syncFleetMarkers();
 
     // Capture-phase wheel listener: fires before any Google Maps listener.
     // passive: false avoids Chrome's passive-listener console warning.
@@ -223,6 +296,10 @@ onUnmounted(() => {
   if (wheelHandler && containerRef.value) {
     containerRef.value.removeEventListener('wheel', wheelHandler, { capture: true });
   }
+  fleetMarkers.forEach((marker) => marker.setMap(null));
+  fleetMarkers.clear();
+  targetMarker?.setMap(null);
+  targetMarker = null;
 });
 
 watch(() => [props.lat, props.lon], ([lat, lon]) => {
@@ -238,6 +315,12 @@ watch(() => props.alt, (alt) => {
 watch(() => props.mapTypeId, (mapTypeId) => {
   if (map.value) map.value.setMapTypeId(mapTypeId);
 });
+
+watch(
+  () => [props.fleetDrones, props.selectedDroneId, props.sharedTarget],
+  syncFleetMarkers,
+  { deep: true },
+);
 
 function displayNameOf(place) {
   if (!place || !place.displayName) return '';

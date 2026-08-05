@@ -64,6 +64,24 @@ const situationSelectedDroneId = computed(() => (fleetEnabled.value ? fleet.sele
 const situationSelectedDrone = computed(() =>
   situationDrones.value.find((item) => item.droneId === situationSelectedDroneId.value) || situationDrones.value[0] || null,
 );
+const fleetSeparationAlert = computed(() => {
+  const online = fleetDroneRows.value.filter((item) => item.online !== false);
+  let closest = null;
+  for (let i = 0; i < online.length; i += 1) {
+    for (let j = i + 1; j < online.length; j += 1) {
+      const a = online[i];
+      const b = online[j];
+      const latScale = 111_320;
+      const lonScale = latScale * Math.max(0.2, Math.cos((((a.lat + b.lat) / 2) * Math.PI) / 180));
+      const dx = (a.lon - b.lon) * lonScale;
+      const dy = (a.lat - b.lat) * latScale;
+      const dz = (a.alt || 0) - (b.alt || 0);
+      const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (!closest || distance < closest.distance) closest = { a, b, distance };
+    }
+  }
+  return closest && closest.distance < 3 ? closest : null;
+});
 const fleetPerformance = reactive({ fps: 0, objects: 0, visible: 0 });
 const openClawSyncState = ref('');
 const openClawPanelOpen = ref(false);
@@ -254,10 +272,17 @@ function detectDroneCommand(text) {
   return null;
 }
 
-function handleOpenClawMessage(text) {
+async function handleOpenClawMessage(text) {
   const action = detectDroneCommand(text);
   if (action) prepareDroneCommand(action);
-  sendOpenClawMessage(text);
+  if (fleetEnabled.value && openClawConnected.value) {
+    try {
+      await sendFleetContext(fleet.buildOpenClawContext());
+    } catch (error) {
+      console.warn('[Fleet] Automatic OpenClaw context sync failed:', error);
+    }
+  }
+  await sendOpenClawMessage(text);
 }
 
 // 3D data source of the shared Cesium viewer. The 3D Aerial / 3D Mesh
@@ -1204,6 +1229,7 @@ onUnmounted(() => {
         :drones="situationDrones"
         :selected-drone-id="situationSelectedDroneId"
         :selected-drone="situationSelectedDrone"
+        :shared-target="fleet.sharedTarget.value"
         @close="closeSituationPanel"
         @mode-change="setSituationMode"
         @select-drone="selectSituationDrone"
@@ -1282,6 +1308,13 @@ onUnmounted(() => {
         </p>
       </section>
       <CollisionWarning :visible="isCollisionFrozen" />
+      <div v-if="fleetSeparationAlert" class="top-center-message top-center-message--warning">
+        {{ t('aerialview.fleet_separation_warning', {
+          first: fleetSeparationAlert.a.name,
+          second: fleetSeparationAlert.b.name,
+          distance: fleetSeparationAlert.distance.toFixed(1),
+        }) }}
+      </div>
       <div v-if="collisionPausedMessage" class="top-center-message top-center-message--warning">
         {{ collisionPausedMessage }}
       </div>

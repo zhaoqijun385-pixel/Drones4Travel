@@ -14,6 +14,7 @@ const props = defineProps({
   drones: { type: Array, default: () => [] },
   selectedDroneId: { type: String, default: '' },
   selectedDrone: { type: Object, default: null },
+  sharedTarget: { type: Object, default: null },
 });
 
 const emit = defineEmits(['close', 'mode-change', 'select-drone']);
@@ -217,7 +218,11 @@ onUnmounted(() => {
           :lon="mapPoint.lon"
           :alt="mapPoint.alt"
           :heading="mapPoint.heading"
+          :fleet-drones="drones"
+          :selected-drone-id="selectedDroneId"
+          :shared-target="sharedTarget"
           map-type-id="roadmap"
+          @drone-select="emit('select-drone', $event)"
         />
         <div class="situation-panel__telemetry">
           <span>{{ mapPoint.lat.toFixed(5) }}, {{ mapPoint.lon.toFixed(5) }}</span>

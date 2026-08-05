@@ -85,6 +85,7 @@
   "command_land": "降落",
   "fleet_demo_hint": "演示遥测仅在本机运行。OpenClaw 只接收只读态势，飞行指令仍走安全校验通道。",
   "fleet_live_hint": "实时状态来自协作房间；没有控制权租约时，服务端会拒绝飞行指令。",
+  "fleet_separation_warning": "间距预警：{first} 与 {second} 仅相距 {distance} 米",
   "page_mesh": "3D Mesh",
   "page_3dgs": "3DGS",
   "page_map": "2D 地图",

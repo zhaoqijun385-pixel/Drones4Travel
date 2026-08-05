@@ -85,6 +85,7 @@
   "command_land": "Land",
   "fleet_demo_hint": "Demo telemetry is local-only. OpenClaw receives read-only context; flight commands stay on the safety-checked channel.",
   "fleet_live_hint": "Live state comes from the collaboration room. The server rejects flight commands without a valid control lease.",
+  "fleet_separation_warning": "Separation warning: {first} and {second} are only {distance} m apart",
   "page_mesh": "3D Mesh",
   "page_3dgs": "3DGS",
   "page_map": "2D Map",
