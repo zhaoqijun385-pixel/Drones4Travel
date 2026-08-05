@@ -1,10 +1,13 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from '@shared-composables/useAuth.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
 const {
   user,
   isAuthenticated,
@@ -57,6 +60,8 @@ async function submitLogin() {
   resetFeedback();
   try {
     await login(email.value.trim(), password.value);
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '';
+    if (redirect.startsWith('/') && !redirect.startsWith('//')) router.replace(redirect);
   } catch (err) {
     showError(err);
   } finally {
@@ -180,6 +185,7 @@ async function submitLogout() {
             v-model="password"
             :type="showPassword ? 'text' : 'password'"
             required
+            minlength="8"
             class="auth-input auth-input--password"
             :placeholder="t('authflow.password_placeholder')"
           />
@@ -213,6 +219,7 @@ async function submitLogout() {
             v-model="password"
             :type="showPassword ? 'text' : 'password'"
             required
+            minlength="8"
             class="auth-input auth-input--password"
             :placeholder="t('authflow.password_placeholder')"
           />
@@ -232,6 +239,7 @@ async function submitLogout() {
             v-model="confirmPassword"
             :type="showConfirmPassword ? 'text' : 'password'"
             required
+            minlength="8"
             class="auth-input auth-input--password"
             :placeholder="t('authflow.confirm_password_placeholder')"
           />

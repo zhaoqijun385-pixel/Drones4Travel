@@ -1,6 +1,7 @@
 """Pydantic schemas exposed by the auth/user routers."""
 
 import uuid
+from typing import Literal
 
 from fastapi_users import schemas
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,11 +12,12 @@ class UserRead(schemas.BaseUser[uuid.UUID]):
 
 
 class UserCreate(schemas.BaseUserCreate):
-    display_name: str | None = None
+    password: str = Field(min_length=8, max_length=1024)
+    display_name: str | None = Field(default=None, max_length=100)
 
 
 class UserUpdate(schemas.BaseUserUpdate):
-    display_name: str | None = None
+    display_name: str | None = Field(default=None, max_length=100)
 
 
 # ─── Settings document (mirrors client/composables/useAppSettings.js) ────────
@@ -67,3 +69,15 @@ class SettingsDocument(BaseModel):
     media: MediaSettings = MediaSettings()
     network: NetworkSettings = NetworkSettings()
     flight: FlightSettings = FlightSettings()
+
+
+class OpenClawConversationCreate(BaseModel):
+    agent_id: str = Field(default="main", min_length=1, max_length=100)
+    session_key: str = Field(min_length=1, max_length=255)
+    title: str | None = Field(default=None, max_length=160)
+
+
+class OpenClawMessageCreate(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=40_000)
+    external_id: str | None = Field(default=None, max_length=255)

@@ -8,12 +8,17 @@ import DockMenuButton from '@shared/DockMenuButton.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useOpenClaw } from '@shared-composables/useOpenClaw.js';
+import { useAuth } from '@shared-composables/useAuth.js';
 
 const { t } = useI18n();
 const router = useRouter();
 const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
-const { status, error, messages, isConnected, sendMessage } = useOpenClaw();
+const { isAuthenticated } = useAuth();
+const {
+  status, error, messages, isConnected, sendMessage,
+  conversations, conversationId, selectAgent, refreshConversations,
+} = useOpenClaw({ autoConnect: true });
 
 const selectedNav = ref('customer_service');
 
@@ -56,8 +61,17 @@ const messagesRef = ref(null);
 async function handleSend() {
   const text = input.value.trim();
   if (!text) return;
-  sendMessage(text);
-  input.value = '';
+  const sent = await sendMessage(text);
+  if (sent) input.value = '';
+}
+
+async function openConversation(conversation) {
+  await selectAgent({
+    agentId: conversation.agent_id,
+    sessionKey: conversation.session_key,
+  });
+  await nextTick();
+  scrollToBottom();
 }
 
 function handleKeydown(e) {
@@ -79,6 +93,7 @@ watch(messages, () => {
 
 /* ─── Dock registration ─── */
 onMounted(() => {
+  if (isAuthenticated.value) refreshConversations();
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
   registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
@@ -182,7 +197,33 @@ onUnmounted(() => {
         <aside
           class="community-sidebar"
           :style="{ flexBasis: leftWidthPct + '%' }"
-        />
+        >
+          <div class="conversation-sidebar__header">
+            <span>{{ t('customerserviceview.conversations') }}</span>
+            <button
+              class="conversation-sidebar__refresh"
+              type="button"
+              :title="t('customerserviceview.refresh_conversations')"
+              @click="refreshConversations"
+            >↻</button>
+          </div>
+          <button
+            v-for="conversation in conversations"
+            :key="conversation.id"
+            type="button"
+            class="conversation-item"
+            :class="{ 'conversation-item--active': conversation.id === conversationId }"
+            @click="openConversation(conversation)"
+          >
+            <span class="conversation-item__title">
+              {{ conversation.title || conversation.agent_id }}
+            </span>
+            <span class="conversation-item__meta">{{ conversation.agent_id }}</span>
+          </button>
+          <p v-if="!conversations.length" class="conversation-sidebar__empty">
+            {{ t('customerserviceview.no_conversations') }}
+          </p>
+        </aside>
 
         <!-- Divider (draggable) -->
         <div
@@ -235,7 +276,9 @@ onUnmounted(() => {
             </div>
             <div v-if="error" class="message-wrapper message-wrapper--system">
               <div class="message-bubble message-bubble--system">
-                <p class="message-text">{{ error }}</p>
+                <p class="message-text">
+                  {{ error === 'login_required' ? t('customerserviceview.login_required') : error }}
+                </p>
               </div>
             </div>
           </div>
@@ -303,6 +346,66 @@ onUnmounted(() => {
 
 .community-sidebar::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.25);
+}
+
+.conversation-sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 16px 10px;
+  color: #374151;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.conversation-sidebar__refresh {
+  border: 0;
+  background: transparent;
+  color: #6b7280;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.conversation-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: calc(100% - 16px);
+  margin: 2px 8px;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #374151;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-item:hover,
+.conversation-item--active {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.conversation-item__title {
+  overflow: hidden;
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-item__meta,
+.conversation-sidebar__empty {
+  color: #6b7280;
+  font-size: 0.74rem;
+}
+
+.conversation-sidebar__empty {
+  margin: 18px 16px;
+  line-height: 1.5;
 }
 
 /* ─── Divider ─── */
@@ -373,13 +476,15 @@ onUnmounted(() => {
 
 .chat-status--error,
 .chat-status--closed,
-.chat-status--idle {
+.chat-status--idle,
+.chat-status--auth_required {
   color: #dc2626;
 }
 
 .chat-status--error::before,
 .chat-status--closed::before,
-.chat-status--idle::before {
+.chat-status--idle::before,
+.chat-status--auth_required::before {
   background: #ef4444;
 }
 

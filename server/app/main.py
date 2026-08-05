@@ -13,8 +13,9 @@ path rewriting, giving identical URLs in dev and production:
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from .config import CONFIG
 from .db import Base, engine
@@ -22,6 +23,7 @@ from .drone_commands import router as drone_commands_router
 from .fleet import HUB as fleet_hub
 from .fleet import router as fleet_router
 from .matrix_auth import router as matrix_router
+from .openclaw_chat import router as openclaw_chat_router
 from .openclaw_agents import router as openclaw_agents_router
 from .schemas import UserCreate, UserRead, UserUpdate
 from .settings import router as settings_router
@@ -114,9 +116,19 @@ app.include_router(drone_commands_router, prefix="/api")
 
 # --- Multi-drone collaboration rooms + lease-guarded command routing --------
 app.include_router(fleet_router, prefix="/api")
+app.include_router(openclaw_chat_router, prefix="/api")
 app.include_router(openclaw_agents_router, prefix="/api")
 
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except Exception as error:
+        logging.getLogger(__name__).exception("database health check failed")
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "degraded", "database": "unavailable"},
+        ) from error
+    return {"status": "ok", "database": "ok"}

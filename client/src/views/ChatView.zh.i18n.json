@@ -12,6 +12,7 @@
   "assistant_status_connected": "在线",
   "assistant_status_error": "连接错误",
   "assistant_status_closed": "已断开",
+  "assistant_status_auth_required": "需要登录",
   "assistant_welcome_title": "连接无人机控制助手",
   "assistant_welcome_description": "可以查询机群状态、检查掉线设备，并在发送飞行指令前进行确认。",
   "assistant_quick_status": "汇总当前机群状态",

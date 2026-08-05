@@ -77,17 +77,19 @@ printf "port = 5433\nunix_socket_directories = '$HOME/pgdata'\n" >> ~/pgdata/pos
 /opt/homebrew/opt/postgresql@14/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
 /opt/homebrew/opt/postgresql@14/bin/pg_ctl -D ~/pgdata stop
 
-# 导入表结构（幂等；先执行 001 再执行 002）
+# 导入表结构（幂等；按顺序执行 001、002、003）
 psql -h 127.0.0.1 -p 5433 -U $USER -v ON_ERROR_STOP=1 \
      -v app_password='local-dev-drone-api' \
      -f ~/drone-navigation/server/migrations/001_init_auth_schema.sql
 psql -h 127.0.0.1 -p 5433 -U $USER -d drone_navigation \
      -v ON_ERROR_STOP=1 -f ~/drone-navigation/server/migrations/002_matrix_account.sql
+psql -h 127.0.0.1 -p 5433 -U $USER -d drone_navigation \
+     -v ON_ERROR_STOP=1 -f ~/drone-navigation/server/migrations/003_openclaw_conversations.sql
 ```
 
 （`psql` 位于 `/opt/homebrew/opt/postgresql@14/bin/psql` —— 把它加入 PATH 或使用完整路径。）
 
-## 第 4 节. FastAPI 后端（认证 + 设置 + Matrix 中转）
+## 第 4 节. FastAPI 后端（认证 + 设置 + Matrix / OpenClaw 中转）
 
 ```bash
 cd ~/drone-navigation/server
@@ -102,7 +104,7 @@ uvicorn app.main:app --reload --port 8000
 
 注意：`--reload` 只监听 `.py` 文件 —— 修改 `config.json` 后，用 `touch app/main.py` 强制重载。
 
-**冒烟测试：** `curl http://localhost:8000/api/health` → `{"status":"ok"}`；然后 `My Space -> Account` 注册并登录，在 Settings 保存一次会出现绿色提示条。
+**冒烟测试：** `curl http://localhost:8000/api/health` 应返回 `{"status":"ok","database":"ok"}`；然后 `My Space -> Account` 注册并登录，在 Settings 保存一次会出现绿色提示条。注册密码至少 8 个字符。
 
 ## 第 5 节. Synapse（社区聊天）
 
@@ -136,7 +138,7 @@ curl -s -X POST localhost:8008/_matrix/client/v3/login \
 
 **冒烟测试：** 用两个浏览器 profile 各登录一个账号，`Community -> Chat` 私信双向可达，刷新后聊天记录仍在。
 
-## 第 6 节. OpenClaw（客服）
+## 第 6 节. OpenClaw（客服与对话记录）
 
 ```bash
 npm install -g openclaw          # 或：pnpm add -g openclaw
@@ -145,7 +147,7 @@ npm install -g openclaw          # 或：pnpm add -g openclaw
 openclaw gateway --port 18789    # 前台运行；要装成守护进程用 `openclaw gateway install`
 ```
 
-SPA 连接 `ws://127.0.0.1:18789` —— `client/config.json` 中的 `openclaw.token` 必须与 `~/.openclaw/openclaw.json` 中的网关令牌一致。
+SPA 连接 `ws://127.0.0.1:18789` —— `client/config.json` 中的 `openclaw.token` 必须与 `~/.openclaw/openclaw.json` 中的网关令牌一致。客服页要求先登录；登录用户的 OpenClaw 会话索引和文本消息会写入 PostgreSQL 的 `openclaw_conversation` / `openclaw_message`，网关负责实时流式回复，数据库负责网站侧历史。
 
 ## 第 7 节. MediaMTX + 摄像头（均原生）
 

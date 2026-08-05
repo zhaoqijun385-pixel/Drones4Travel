@@ -5,11 +5,12 @@ The OAuthAccount table exists from day one so Google sign-in works now and
 Facebook/GitHub/Instagram only need a new httpx-oauth client — no migration.
 """
 
+import uuid
 from datetime import datetime
 
 from fastapi_users.db import SQLAlchemyBaseOAuthAccountTableUUID, SQLAlchemyBaseUserTableUUID
 from fastapi_users_db_sqlalchemy.generics import GUID
-from sqlalchemy import JSON, DateTime, ForeignKey, String, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -73,6 +74,84 @@ class MatrixAccount(Base):
         primary_key=True,
     )
     mxid: Mapped[str] = mapped_column(String(length=255), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class OpenClawConversation(Base):
+    """A user's durable mapping to one OpenClaw session.
+
+    The gateway remains the source of truth for live protocol history. This
+    table gives the website an authenticated, queryable index so a user can
+    reopen the same agent conversation after a browser refresh or gateway
+    restart without exposing another user's session key.
+    """
+
+    __tablename__ = "openclaw_conversation"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "session_key",
+            name="uq_openclaw_conversation_user_session",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[GUID] = mapped_column(
+        GUID,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    agent_id: Mapped[str] = mapped_column(String(length=100), nullable=False)
+    session_key: Mapped[str] = mapped_column(String(length=255), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(length=160), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OpenClawMessage(Base):
+    """Durable text transcript entries mirrored from the OpenClaw gateway."""
+
+    __tablename__ = "openclaw_message"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "external_id",
+            name="uq_openclaw_message_conversation_external",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("openclaw_conversation.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(length=20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(length=255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

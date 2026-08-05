@@ -1,5 +1,10 @@
 {
   "page_title": "Customer Service",
+  "conversations": "Conversations",
+  "refresh_conversations": "Refresh conversations",
+  "no_conversations": "Sign in and send a message to keep a conversation index here.",
+  "login_required": "Please sign in before connecting to OpenClaw.",
+  "status_auth_required": "Sign-in required",
   "nav_pages": "Pages",
   "ad_placeholder": "Advertisement Area",
   "placeholder_send": "Type a message...",

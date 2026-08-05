@@ -1,5 +1,6 @@
 import { ref, computed, onUnmounted } from 'vue';
 import config from '../config.json';
+import { apiFetch, useAuth } from './useAuth.js';
 
 const DEFAULT_URL = 'ws://127.0.0.1:18789';
 const DEFAULT_SESSION_KEY = 'agent:main:main';
@@ -64,13 +65,16 @@ function isHeartbeatPrefix(text) {
 }
 
 export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId = 'openclaw-control-ui' } = {}) {
+  const { isAuthenticated } = useAuth();
   const ws = ref(null);
-  const status = ref('idle'); // idle | connecting | connected | error | closed
+  const status = ref('idle'); // idle | connecting | connected | auth_required | error | closed
   const error = ref(null);
   const messages = ref([]);
   const sessionKey = ref(null);
   const activeAgentId = ref('main');
   const preferredSessionKey = ref(DEFAULT_SESSION_KEY);
+  const conversations = ref([]);
+  const conversationId = ref('');
   const pendingRequests = new Map();
   const sessionMessages = new Map();
 
@@ -85,6 +89,57 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
 
   const gatewayUrl = resolveGatewayUrl();
   const gatewayToken = config.openclaw?.token || '';
+
+  async function refreshConversations() {
+    if (!isAuthenticated.value) return [];
+    try {
+      const res = await apiFetch('/api/openclaw/conversations');
+      if (!res.ok) return [];
+      conversations.value = await res.json();
+    } catch {
+      /* The gateway remains usable if the optional transcript index is offline. */
+    }
+    return conversations.value;
+  }
+
+  async function ensureConversation() {
+    if (!isAuthenticated.value || !sessionKey.value) return null;
+    try {
+      const res = await apiFetch('/api/openclaw/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: activeAgentId.value,
+          session_key: sessionKey.value,
+          title: activeAgentId.value === 'main' ? 'OpenClaw 客服' : `Drone ${activeAgentId.value}`,
+        }),
+      });
+      if (!res.ok) return null;
+      const row = await res.json();
+      conversationId.value = row.id || '';
+      await refreshConversations();
+      return row;
+    } catch {
+      return null;
+    }
+  }
+
+  async function persistMessage(message, externalId = '') {
+    if (!conversationId.value || !isAuthenticated.value || !message?.text) return;
+    try {
+      await apiFetch(`/api/openclaw/conversations/${conversationId.value}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role: message.sender === 'user' ? 'user' : 'assistant',
+          content: message.text,
+          external_id: externalId || message.id || null,
+        }),
+      });
+    } catch {
+      /* Transcript persistence is best effort and must not block live chat. */
+    }
+  }
 
   function appendMessage(message) {
     messages.value.push(message);
@@ -172,7 +227,9 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
       error.value = null;
       reconnectDelay = RECONNECT_DELAY_MS;
       await initSession();
+      await ensureConversation();
       await loadHistory();
+      await refreshConversations();
     } catch (e) {
       error.value = e.message || 'Handshake failed';
       status.value = 'error';
@@ -181,6 +238,10 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
   }
 
   async function initSession() {
+    if (preferredSessionKey.value && preferredSessionKey.value !== DEFAULT_SESSION_KEY) {
+      sessionKey.value = preferredSessionKey.value;
+      return;
+    }
     if (activeAgentId.value !== 'main') {
       const key = preferredSessionKey.value || `agent:${activeAgentId.value}:main`;
       try {
@@ -230,7 +291,7 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
         limit: 50,
       });
       if (history?.messages && Array.isArray(history.messages)) {
-        messages.value = history.messages
+        const restored = history.messages
           .filter((entry) => {
             const role = typeof entry.role === 'string' ? entry.role.toLowerCase() : '';
             if (role !== 'user' && role !== 'assistant') return false;
@@ -242,8 +303,11 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
             sender: entry.role.toLowerCase() === 'user' ? 'user' : 'bot',
             text: extractText(entry),
             time: formatTime(entry.timestamp),
+            externalId: entry.messageId || entry.id || '',
           }));
+        messages.value = restored;
         sessionMessages.set(sessionKey.value, messages.value);
+        await Promise.all(restored.map((entry) => persistMessage(entry, entry.externalId)));
       }
     } catch (e) {
       console.warn('[OpenClaw] Failed to load history:', e.message);
@@ -294,15 +358,20 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
       // Ignore the gateway keep-alive message; it is not part of the conversation.
       if (isHeartbeatMessage(text)) return;
       if (runId && partialRunIds.has(runId)) {
+        const partial = partialRunIds.get(runId);
+        partial.text = text;
         partialRunIds.delete(runId);
+        void persistMessage(partial, message.messageId || message.id || runId || partial.id);
         return;
       }
-      appendMessage({
+      const finalMessage = {
         id: generateId(),
         sender: 'bot',
         text,
         time: formatTime(),
-      });
+      };
+      appendMessage(finalMessage);
+      void persistMessage(finalMessage, message.messageId || message.id || runId || finalMessage.id);
     }
   }
 
@@ -314,12 +383,13 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
       return false;
     }
 
-    appendMessage({
+    const outgoing = {
       id: generateId(),
       sender: 'user',
       text: trimmed,
       time: formatTime(),
-    });
+    };
+    appendMessage(outgoing);
 
     try {
       await sendRequest('chat.send', {
@@ -327,6 +397,7 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
         message: trimmed,
         idempotencyKey: generateId(),
       });
+      void persistMessage(outgoing, outgoing.id);
       return true;
     } catch (e) {
       error.value = e.message || 'Failed to send message';
@@ -359,12 +430,18 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
       return;
     }
     await initSession();
+    await ensureConversation();
     messages.value = sessionMessages.get(sessionKey.value) || [];
     await loadHistory();
   }
 
   function connect() {
     if (ws.value) return;
+    if (!isAuthenticated.value) {
+      status.value = 'auth_required';
+      error.value = 'login_required';
+      return;
+    }
     // Manual reconnect after an intentional close is allowed. The existing
     // auto-reconnect path still remains gated by intentionallyClosed.
     intentionallyClosed = false;
@@ -439,6 +516,9 @@ export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId
     selectAgent,
     activeAgentId,
     sessionKey,
+    conversations,
+    conversationId,
+    refreshConversations,
     connect,
     close,
   };

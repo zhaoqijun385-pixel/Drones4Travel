@@ -11,7 +11,7 @@
 
 import { computed, ref } from 'vue';
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
+export const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
 const TOKEN_KEY = 'drone.auth.token';
 
 const token = ref(localStorage.getItem(TOKEN_KEY) || '');
@@ -30,6 +30,38 @@ function authError(code, fallback = 'error_generic') {
   return err;
 }
 
+async function responseDetail(res) {
+  try {
+    const payload = await res.json();
+    if (typeof payload?.detail === 'string') return payload.detail.toLowerCase();
+    if (Array.isArray(payload?.detail)) return JSON.stringify(payload.detail).toLowerCase();
+  } catch {
+    /* Some proxies return an empty or non-JSON error body. */
+  }
+  return '';
+}
+
+function errorCodeForResponse(res, detail, fallback, credentials = false) {
+  if (credentials && [400, 401, 422].includes(res.status)) return 'error_invalid_credentials';
+  if (res.status === 422 && /password/.test(detail)) return 'error_password_too_short';
+  if (/already registered|already[_ ]exists|unique/.test(detail)) return 'error_email_exists';
+  return fallback;
+}
+
+/** Authenticated API helper shared by settings, Matrix, and OpenClaw stores. */
+export async function apiFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (token.value && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token.value}`);
+  }
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (res.status === 401) {
+    setToken('');
+    user.value = null;
+  }
+  return res;
+}
+
 export function useAuth() {
   const isAuthenticated = computed(() => !!token.value);
 
@@ -37,11 +69,9 @@ export function useAuth() {
     if (!token.value) { user.value = null; return null; }
     if (!mePromise) {
       mePromise = (async () => {
-        const res = await fetch(`${API_BASE}/api/users/me`, {
-          headers: { Authorization: `Bearer ${token.value}` },
-        });
+        const res = await apiFetch('/api/users/me');
         if (res.status === 401) { setToken(''); user.value = null; return null; }
-        if (!res.ok) throw authError('error_generic');
+        if (!res.ok) throw authError('error_server_unavailable');
         user.value = await res.json();
         return user.value;
       })().finally(() => { mePromise = null; });
@@ -50,15 +80,18 @@ export function useAuth() {
   }
 
   async function login(email, password) {
-    const res = await fetch(`${API_BASE}/api/auth/jwt/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ username: email, password }),
-    });
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/auth/jwt/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ username: email, password }),
+      });
+    } catch {
+      throw authError('error_server_unavailable');
+    }
     if (!res.ok) {
-      throw authError(
-        res.status === 400 ? 'error_invalid_credentials' : 'error_generic',
-      );
+      throw authError(errorCodeForResponse(res, await responseDetail(res), 'error_server_unavailable', true));
     }
     const data = await res.json();
     setToken(data.access_token);
@@ -67,12 +100,19 @@ export function useAuth() {
   }
 
   async function register(email, password, displayName) {
-    const res = await fetch(`${API_BASE}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, display_name: displayName || null }),
-    });
-    if (!res.ok) throw authError('error_register_failed');
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, display_name: displayName || null }),
+      });
+    } catch {
+      throw authError('error_server_unavailable');
+    }
+    if (!res.ok) {
+      throw authError(errorCodeForResponse(res, await responseDetail(res), 'error_register_failed'));
+    }
     return res.json(); // fastapi-users does NOT log in on register
   }
 
@@ -89,34 +129,55 @@ export function useAuth() {
 
   async function requestPasswordReset(email) {
     // Always 202 by design (does not reveal whether the email exists).
-    await fetch(`${API_BASE}/api/auth/forgot-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
-    });
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+    } catch {
+      throw authError('error_server_unavailable');
+    }
+    if (!res.ok) throw authError('error_server_unavailable');
   }
 
   async function resetPassword(resetToken, password) {
-    const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: resetToken, password }),
-    });
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetToken, password }),
+      });
+    } catch {
+      throw authError('error_server_unavailable');
+    }
     if (!res.ok) throw authError('reset_error');
   }
 
   async function verifyEmail(verifyToken) {
-    const res = await fetch(`${API_BASE}/api/auth/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: verifyToken }),
-    });
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/auth/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: verifyToken }),
+      });
+    } catch {
+      throw authError('error_server_unavailable');
+    }
     if (!res.ok) throw authError('verify_error');
     return res.json();
   }
 
   async function googleLogin() {
-    const res = await fetch(`${API_BASE}/api/auth/google/authorize`);
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/auth/google/authorize`);
+    } catch {
+      throw authError('error_server_unavailable');
+    }
     if (!res.ok) throw authError('google_unavailable');
     const data = await res.json();
     if (!data.authorization_url) throw authError('google_unavailable');

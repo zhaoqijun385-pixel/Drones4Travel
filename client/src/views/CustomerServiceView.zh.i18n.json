@@ -1,5 +1,10 @@
 {
   "page_title": "客服",
+  "conversations": "历史对话",
+  "refresh_conversations": "刷新历史对话",
+  "no_conversations": "登录后发送消息，这里会保留对话索引。",
+  "login_required": "请先登录后再连接 OpenClaw。",
+  "status_auth_required": "需要登录",
   "nav_pages": "页面",
   "ad_placeholder": "广告区域",
   "placeholder_send": "输入消息...",

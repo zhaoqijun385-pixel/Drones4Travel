@@ -8,6 +8,7 @@ import ChatView from '@/views/ChatView.vue';
 import SettingsView from '@/views/SettingsView.vue';
 import MySpaceView from '@/views/MySpaceView.vue';
 import ExtensionsView from '@/views/ExtensionsView.vue';
+import { useAuth } from '@shared-composables/useAuth.js';
 
 const routes = [
   {
@@ -39,16 +40,19 @@ const routes = [
     path: '/chat',
     name: 'Chat',
     component: ChatView,
+    meta: { requiresAuth: true },
   },
   {
     path: '/customer-service',
     name: 'CustomerService',
     component: () => import('@/views/CustomerServiceView.vue'),
+    meta: { requiresAuth: true },
   },
   {
     path: '/settings',
     name: 'Settings',
     component: SettingsView,
+    meta: { requiresAuth: true },
   },
   {
     path: '/myspace',
@@ -81,6 +85,24 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+});
+
+router.beforeEach(async (to) => {
+  if (!to.meta.requiresAuth) return true;
+  const { token, user, fetchMe } = useAuth();
+  if (!token.value) {
+    return { path: '/myspace', query: { sub: 'account', redirect: to.fullPath } };
+  }
+  if (!user.value) {
+    try {
+      const me = await fetchMe();
+      if (!me) return { path: '/myspace', query: { sub: 'account', redirect: to.fullPath } };
+    } catch {
+      // Preserve the route during a temporary API outage; the page can show
+      // its own retry state while the token remains available locally.
+    }
+  }
+  return true;
 });
 
 export default router;

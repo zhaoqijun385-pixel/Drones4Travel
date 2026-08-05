@@ -12,6 +12,7 @@
   "assistant_status_connected": "Online",
   "assistant_status_error": "Connection error",
   "assistant_status_closed": "Disconnected",
+  "assistant_status_auth_required": "Sign-in required",
   "assistant_welcome_title": "Connect to the drone control assistant",
   "assistant_welcome_description": "Ask about fleet status, inspect offline devices, and confirm flight commands before sending them.",
   "assistant_quick_status": "Summarize current fleet status",
