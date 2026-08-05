@@ -84,8 +84,11 @@ function lastTextOf(room) {
   const events = room.getLiveTimeline().getEvents();
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const ev = events[i];
-    if (ev.getType() === 'm.room.message' && ev.getContent()?.msgtype === 'm.text') {
-      return ev.getContent().body || '';
+    if (ev.getType() !== 'm.room.message') continue;
+    const content = ev.getContent() || {};
+    if (content.msgtype === 'm.text') return content.body || '';
+    if (['m.image', 'm.video', 'm.audio', 'm.file'].includes(content.msgtype)) {
+      return `📎 ${content.body || 'Attachment'}`;
     }
   }
   return '';
@@ -154,15 +157,29 @@ function refreshTimeline() {
   for (const ev of visibleEvents) {
     if (ev.getType() !== 'm.room.message') continue;
     const content = ev.getContent() || {};
-    if (content.msgtype !== 'm.text' || typeof content.body !== 'string') continue;
+    const isText = content.msgtype === 'm.text' && typeof content.body === 'string';
+    const isMedia = ['m.image', 'm.video', 'm.audio', 'm.file'].includes(content.msgtype)
+      && typeof content.url === 'string';
+    if (!isText && !isMedia) continue;
     const senderId = ev.getSender();
+    const mediaType = content.msgtype === 'm.image'
+      ? 'image'
+      : content.msgtype === 'm.video'
+        ? 'video'
+        : content.msgtype === 'm.audio'
+          ? 'audio'
+          : 'file';
     msgs.push({
       id: ev.getId(),
       senderId,
       senderName: room.getMember(senderId)?.name || senderId,
-      body: content.body,
+      body: content.body || 'Attachment',
       ts: ev.getTs(),
       mine: senderId === me,
+      kind: isMedia ? 'media' : 'text',
+      mediaType: isMedia ? mediaType : '',
+      mediaUrl: isMedia ? client.mxcUrlToHttp(content.url) : '',
+      mediaSize: Number(content.info?.size || 0),
     });
   }
   timeline.value = msgs;
@@ -304,6 +321,39 @@ async function sendText(body) {
   refreshRooms();
 }
 
+async function sendAttachment(file) {
+  if (!client || !activeRoomId.value || !file) return false;
+  try {
+    const type = file.type || 'application/octet-stream';
+    const upload = await client.uploadContent(file, {
+      name: file.name,
+      type,
+      includeFilename: true,
+    });
+    const url = upload?.content_uri;
+    if (!url) return false;
+    const msgtype = type.startsWith('image/')
+      ? 'm.image'
+      : type.startsWith('video/')
+        ? 'm.video'
+        : type.startsWith('audio/')
+          ? 'm.audio'
+          : 'm.file';
+    await client.sendMessage(activeRoomId.value, {
+      msgtype,
+      body: file.name || 'Attachment',
+      url,
+      info: { mimetype: type, size: file.size },
+    });
+    refreshTimeline();
+    refreshRooms();
+    return true;
+  } catch (err) {
+    console.error('[matrix] attachment upload failed:', err);
+    return false;
+  }
+}
+
 let typingTimer = null;
 function noteTyping() {
   if (!client || !activeRoomId.value) return;
@@ -387,7 +437,7 @@ export function useMatrixClient() {
     activeRoomId, activeRoom, timeline, typingNames,
     directory,
     bootstrap, teardown, armAuthWatcher,
-    setActiveRoom, sendText, noteTyping, markRead,
+    setActiveRoom, sendText, sendAttachment, noteTyping, markRead,
     createDm, createTeamRoom, fetchDirectory,
   };
 }

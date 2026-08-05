@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, h, nextTick, onMounted, onUnmounted } from 'vue';
+import { ref, computed, h, nextTick, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
@@ -8,6 +8,7 @@ import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useAuth } from '@shared-composables/useAuth.js';
 import { useMatrixClient } from '@shared-composables/useMatrixClient.js';
+import { useOpenClaw } from '@shared-composables/useOpenClaw.js';
 import { useRouter } from 'vue-router';
 
 const { t } = useI18n();
@@ -19,8 +20,16 @@ const {
   ready: chatReady, error: chatError,
   dms, teamRooms, activeRoom, activeRoomId, timeline, typingNames, directory,
   bootstrap, setActiveRoom, sendText, noteTyping,
-  createDm, createTeamRoom, fetchDirectory,
+  sendAttachment, createDm, createTeamRoom, fetchDirectory,
 } = useMatrixClient();
+const {
+  status: assistantStatus,
+  error: assistantError,
+  messages: assistantMessages,
+  isConnected: assistantConnected,
+  sendMessage: sendAssistantMessage,
+  connect: connectAssistant,
+} = useOpenClaw({ autoConnect: false, autoReconnect: false, clientId: 'openclaw-chat-ui' });
 
 /* ─── Left-column width drag ─── */
 const LEFT_MIN = 280;
@@ -62,6 +71,11 @@ function onDividerPointerUp() {
 const selectedNav = ref('chat');
 const conversationSearch = ref('');
 const contactSearch = ref('');
+const selectedConversation = ref('matrix');
+const assistantUnread = ref(0);
+const fileInput = ref(null);
+const uploading = ref(false);
+const attachmentError = ref('');
 
 /* ─── Composer ─── */
 const input = ref('');
@@ -70,11 +84,16 @@ const messagesRef = ref(null);
 
 async function sendMessage() {
   const text = input.value.trim();
-  if (!text || sending.value || !activeRoomId.value) return;
+  if (!text || sending.value || (!activeRoomId.value && !isAssistantSelected.value)) return;
   sending.value = true;
   try {
-    await sendText(text);
-    input.value = '';
+    if (isAssistantSelected.value) {
+      const sent = await sendAssistantMessage(text);
+      if (sent) input.value = '';
+    } else {
+      await sendText(text);
+      input.value = '';
+    }
     await nextTick();
     scrollToBottom();
   } finally {
@@ -90,7 +109,7 @@ function handleKeydown(e) {
 }
 
 function onComposerInput() {
-  noteTyping();
+  if (!isAssistantSelected.value) noteTyping();
 }
 
 function scrollToBottom() {
@@ -100,9 +119,50 @@ function scrollToBottom() {
 }
 
 async function selectRoom(roomId) {
+  selectedConversation.value = 'matrix';
   setActiveRoom(roomId);
   await nextTick();
   scrollToBottom();
+}
+
+async function openAssistant() {
+  selectedNav.value = 'chat';
+  selectedConversation.value = 'assistant';
+  assistantUnread.value = 0;
+  setActiveRoom('');
+  if (!assistantConnected.value && assistantStatus.value !== 'connecting') connectAssistant();
+  await nextTick();
+  scrollToBottom();
+}
+
+function retryAssistant() {
+  if (assistantStatus.value !== 'connecting') connectAssistant();
+}
+
+function openFilePicker() {
+  if (isAssistantSelected.value || uploading.value) return;
+  fileInput.value?.click();
+}
+
+async function onFileSelected(event) {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file || isAssistantSelected.value) return;
+  uploading.value = true;
+  attachmentError.value = '';
+  try {
+    const sent = await sendAttachment(file);
+    if (!sent) attachmentError.value = t('chatview.attachment_failed');
+    await nextTick();
+    scrollToBottom();
+  } finally {
+    uploading.value = false;
+  }
+}
+
+function sendQuickAssistantPrompt(prompt) {
+  input.value = prompt;
+  sendMessage();
 }
 
 /* ─── New chat / team room dialog ─── */
@@ -191,6 +251,23 @@ const filteredDirectory = computed(() => {
 });
 const unreadTotal = computed(() => [...dms.value, ...teamRooms.value]
   .reduce((total, room) => total + (room.unreadCount || 0), 0));
+const isAssistantSelected = computed(() => selectedConversation.value === 'assistant');
+const assistantPreview = computed(() => {
+  const last = assistantMessages.value[assistantMessages.value.length - 1];
+  return last?.text || t('chatview.assistant_preview');
+});
+const assistantStatusText = computed(() => t(`chatview.assistant_status_${assistantStatus.value}`));
+const assistantQuickPrompts = computed(() => [
+  t('chatview.assistant_quick_status'),
+  t('chatview.assistant_quick_offline'),
+  t('chatview.assistant_quick_help'),
+]);
+
+watch(assistantMessages, (next, previous = []) => {
+  if (isAssistantSelected.value || next.length <= previous.length) return;
+  const latest = next[next.length - 1];
+  if (latest?.sender === 'bot') assistantUnread.value += 1;
+});
 
 onMounted(() => {
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
@@ -314,6 +391,19 @@ onUnmounted(() => {
               <ConfigurableIcon name="CHAT_SEARCH" :size="16" />
               <input v-model="conversationSearch" :placeholder="t('chatview.search_conversations')" />
             </label>
+            <button
+              class="room-item room-item--assistant"
+              :class="{ 'room-item--active': isAssistantSelected }"
+              @click="openAssistant"
+            >
+              <span class="room-avatar room-avatar--assistant">AI</span>
+              <span class="room-meta">
+                <span class="room-name">{{ t('chatview.assistant_name') }}</span>
+                <span class="room-preview">{{ assistantPreview }}</span>
+              </span>
+              <span class="room-time">{{ assistantStatusText }}</span>
+              <span v-if="assistantUnread" class="room-unread">{{ assistantUnread > 99 ? '99+' : assistantUnread }}</span>
+            </button>
             <div class="sidebar-actions">
               <button class="sidebar-action" :disabled="!chatReady" @click="openDialog('dm')">
                 + {{ t('chatview.new_chat') }}
@@ -488,14 +578,71 @@ onUnmounted(() => {
           <template v-else>
             <!-- Chat header -->
             <header class="chat-header">
-              <h1 class="chat-header-title">
+              <div v-if="isAssistantSelected">
+                <h1 class="chat-header-title">{{ t('chatview.assistant_name') }}</h1>
+                <p class="chat-header-subtitle">{{ t('chatview.assistant_description') }}</p>
+              </div>
+              <h1 v-else class="chat-header-title">
                 {{ activeRoom ? activeRoom.name : t('chatview.conversations') }}
               </h1>
-              <span class="chat-status">{{ t('chatview.online') }}</span>
+              <span v-if="isAssistantSelected" class="chat-status" :class="`chat-status--${assistantStatus}`">
+                {{ assistantStatusText }}
+              </span>
+              <span v-else class="chat-status">{{ t('chatview.online') }}</span>
             </header>
 
+            <!-- OpenClaw assistant conversation -->
+            <template v-if="isAssistantSelected">
+              <div ref="messagesRef" class="messages">
+                <div v-if="!assistantMessages.length" class="assistant-welcome">
+                  <span class="room-avatar room-avatar--assistant">AI</span>
+                  <h2>{{ t('chatview.assistant_welcome_title') }}</h2>
+                  <p>{{ t('chatview.assistant_welcome_description') }}</p>
+                  <div class="assistant-quick-actions">
+                    <button
+                      v-for="prompt in assistantQuickPrompts"
+                      :key="prompt"
+                      type="button"
+                      @click="sendQuickAssistantPrompt(prompt)"
+                    >{{ prompt }}</button>
+                  </div>
+                </div>
+                <div
+                  v-for="msg in assistantMessages"
+                  :key="msg.id"
+                  class="message-wrapper"
+                  :class="msg.sender === 'user' ? 'message-wrapper--user' : 'message-wrapper--bot'"
+                >
+                  <div class="message-bubble" :class="msg.sender === 'user' ? 'message-bubble--user' : 'message-bubble--bot'">
+                    <p class="message-text">{{ msg.text }}</p>
+                    <span class="message-time">{{ msg.time }}</span>
+                  </div>
+                </div>
+              </div>
+              <div v-if="assistantError" class="chat-notice chat-notice--red assistant-error">
+                {{ assistantError }}
+                <button type="button" @click="retryAssistant">{{ t('chatview.retry') }}</button>
+              </div>
+              <div v-if="!assistantConnected && assistantStatus !== 'connecting'" class="assistant-offline-hint">
+                {{ t('chatview.assistant_offline_hint') }}
+                <button type="button" @click="retryAssistant">{{ t('chatview.retry') }}</button>
+              </div>
+              <footer class="chat-inputbar">
+                <textarea
+                  v-model="input"
+                  class="chat-input"
+                  :placeholder="t('chatview.assistant_placeholder')"
+                  rows="1"
+                  @keydown="handleKeydown"
+                />
+                <button class="send-btn" :title="t('chatview.send')" :disabled="sending || !assistantConnected" @click="sendMessage">
+                  <ConfigurableIcon name="CHAT_SEND" :size="18" />
+                </button>
+              </footer>
+            </template>
+
             <!-- No room selected -->
-            <div v-if="!activeRoom" class="chat-empty">
+            <div v-else-if="!activeRoom" class="chat-empty">
               <p>{{ t('chatview.select_room') }}</p>
             </div>
 
@@ -510,7 +657,24 @@ onUnmounted(() => {
                 >
                   <div class="message-bubble" :class="msg.mine ? 'message-bubble--user' : 'message-bubble--bot'">
                     <span v-if="!msg.mine && !activeRoom.isDm" class="message-sender">{{ msg.senderName }}</span>
-                    <p class="message-text">{{ msg.body }}</p>
+                    <template v-if="msg.kind === 'media'">
+                      <img
+                        v-if="msg.mediaType === 'image' && msg.mediaUrl"
+                        class="message-image"
+                        :src="msg.mediaUrl"
+                        :alt="msg.body"
+                        loading="lazy"
+                      />
+                      <a
+                        v-if="msg.mediaUrl"
+                        class="message-attachment"
+                        :href="msg.mediaUrl"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >📎 {{ msg.body }}</a>
+                      <p v-else class="message-text">📎 {{ msg.body }}</p>
+                    </template>
+                    <p v-else class="message-text">{{ msg.body }}</p>
                     <span class="message-time">{{ timeFmt(msg.ts) }}</span>
                   </div>
                 </div>
@@ -521,7 +685,8 @@ onUnmounted(() => {
 
               <!-- Input bar -->
               <footer class="chat-inputbar">
-                <button class="icon-btn" :title="t('chatview.attach_file')">
+                <input ref="fileInput" class="visually-hidden" type="file" @change="onFileSelected" />
+                <button class="icon-btn" :title="uploading ? t('chatview.uploading') : t('chatview.attach_file')" :disabled="uploading" @click="openFilePicker">
                   <ConfigurableIcon name="CHAT_ATTACHMENT" :size="22" />
                 </button>
                 <textarea
@@ -536,6 +701,7 @@ onUnmounted(() => {
                   <ConfigurableIcon name="CHAT_SEND" :size="18" />
                 </button>
               </footer>
+              <p v-if="attachmentError" class="attachment-error">{{ attachmentError }}</p>
             </template>
           </template>
           </template>
@@ -711,6 +877,24 @@ onUnmounted(() => {
 
 .room-avatar--team {
   background: #8b5cf6;
+}
+
+.room-avatar--assistant {
+  background: linear-gradient(135deg, #111827, #4f46e5);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+}
+
+.room-item--assistant {
+  margin: 0 8px 8px;
+  width: calc(100% - 16px);
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  background: rgba(238, 242, 255, 0.6);
+}
+
+.room-item--assistant:hover,
+.room-item--assistant.room-item--active {
+  background: rgba(99, 102, 241, 0.14);
 }
 
 .room-meta {
@@ -904,6 +1088,29 @@ onUnmounted(() => {
   word-break: break-word;
 }
 
+.message-image {
+  display: block;
+  max-width: min(320px, 100%);
+  max-height: 280px;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+.message-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font-size: 0.85rem;
+  font-weight: 650;
+  text-decoration: none;
+  word-break: break-word;
+}
+
+.message-attachment:hover {
+  text-decoration: underline;
+}
+
 .message-time {
   font-size: 0.7rem;
   opacity: 0.7;
@@ -915,6 +1122,122 @@ onUnmounted(() => {
   font-size: 0.75rem;
   font-style: italic;
   color: #6e6e73;
+}
+
+.assistant-welcome {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  max-width: 460px;
+  margin: auto;
+  padding: 36px 20px;
+  color: #6e6e73;
+  text-align: center;
+}
+
+.assistant-welcome .room-avatar {
+  width: 54px;
+  height: 54px;
+  margin-bottom: 14px;
+}
+
+.assistant-welcome h2 {
+  margin: 0 0 8px;
+  color: #1d1d1f;
+  font-size: 1.05rem;
+}
+
+.assistant-welcome p {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.assistant-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.assistant-quick-actions button,
+.assistant-error button,
+.assistant-offline-hint button {
+  border: 1px solid rgba(99, 102, 241, 0.28);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #4338ca;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.assistant-quick-actions button {
+  padding: 8px 12px;
+}
+
+.assistant-quick-actions button:hover,
+.assistant-error button:hover,
+.assistant-offline-hint button:hover {
+  background: #eef2ff;
+}
+
+.assistant-error,
+.assistant-offline-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 20px 0;
+}
+
+.assistant-error button,
+.assistant-offline-hint button {
+  padding: 4px 9px;
+  flex-shrink: 0;
+}
+
+.assistant-offline-hint {
+  justify-content: center;
+  color: #6e6e73;
+  font-size: 0.74rem;
+}
+
+.chat-status--connecting {
+  color: #b45309;
+}
+
+.chat-status--connecting::before {
+  background: #f59e0b;
+}
+
+.chat-status--error,
+.chat-status--closed,
+.chat-status--idle {
+  color: #6e6e73;
+}
+
+.chat-status--error::before,
+.chat-status--closed::before,
+.chat-status--idle::before {
+  background: #9ca3af;
+}
+
+.attachment-error {
+  margin: 0 24px 8px;
+  color: #b3261e;
+  font-size: 0.74rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ─── Input bar ─── */
@@ -963,6 +1286,11 @@ onUnmounted(() => {
 
 .icon-btn:hover {
   background: #f3f4f6;
+}
+
+.icon-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .send-btn {
