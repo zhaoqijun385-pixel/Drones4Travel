@@ -46,9 +46,24 @@ if [ -n "${RADIO_URL:-}" ]; then
     set -- --cf-uri "$RADIO_URL" "$@"
 fi
 
-# Activate the drone-navigation conda environment
+# Activate the drone-navigation conda environment.  The local desktop setup
+# may create it as a prefix environment under ~/.local/share rather than as a
+# named environment, so prefer an explicitly supplied path, then the active
+# environment, then the known local prefix.
 eval "$(conda shell.bash hook)"
-conda activate drone-navigation
+if [ -n "${DRONE_CONDA_ENV:-}" ]; then
+    conda activate "$DRONE_CONDA_ENV"
+elif [ -n "${CONDA_PREFIX:-}" ] && [ "${CONDA_DEFAULT_ENV:-}" != "base" ]; then
+    : # Keep the already-active project environment.
+elif conda env list | awk '{print $1}' | grep -qx 'drone-navigation'; then
+    conda activate drone-navigation
+elif [ -d "$HOME/.local/share/drone-navigation-local/conda-envs/drone-navigation" ]; then
+    conda activate "$HOME/.local/share/drone-navigation-local/conda-envs/drone-navigation"
+else
+    echo "[Launcher] Cannot find the drone-navigation Conda environment." >&2
+    echo "[Launcher] Set DRONE_CONDA_ENV=/path/to/env and retry." >&2
+    exit 1
+fi
 
 echo "[Launcher] Starting Crazyflie Bridge..."
 echo "[Launcher] Drone IP:      $CRAZYFLIE_IP"

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import platform
 import socket
 import time
 from urllib.parse import urlparse
@@ -37,11 +38,10 @@ MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API", "https://drone-navigation.com/
 STUN_SERVER = os.environ.get("STUN_SERVER", "")
 MONITOR_INTERVAL = 10  # seconds between stats / viewer log lines
 
-# Webcam device: set WEBCAM_DEVICE=2 to force /dev/video2. When unset, the
-# script probes 0..3 and picks the first device that actually delivers a
-# frame — some nodes (IR/metadata sensors of an "Integrated RGB Camera"
-# pair, or a device held by another app) open fine and report a resolution
-# but never produce a single frame, which silently kills the stream.
+# Webcam device: set WEBCAM_DEVICE to force a camera index. Linux uses
+# /dev/videoN; macOS uses AVFoundation camera indices (there are no
+# /dev/video* nodes). When unset, probe 0..3 and keep the first device that
+# actually delivers a frame.
 WEBCAM_DEVICE = os.environ.get("WEBCAM_DEVICE")
 
 
@@ -58,11 +58,13 @@ def open_working_webcam():
     forever on a dead node, so 'opened OK' alone proves nothing.
     """
     candidates = [int(WEBCAM_DEVICE)] if WEBCAM_DEVICE is not None else [0, 2, 1, 3]
+    system = platform.system()
+    backend = cv2.CAP_AVFOUNDATION if system == "Darwin" else 0
     for idx in candidates:
-        path = f"/dev/video{idx}"
-        if not os.path.exists(path):
+        path = f"/dev/video{idx}" if system != "Darwin" else f"AVFoundation camera index {idx}"
+        if system != "Darwin" and not os.path.exists(path):
             continue
-        cap = cv2.VideoCapture(idx)
+        cap = cv2.VideoCapture(idx, backend)
         if not cap.isOpened():
             log("INIT", f"WARNING: {path} failed to open (busy or metadata-only) — skipping.")
             cap.release()
@@ -92,7 +94,7 @@ class WebcamStreamTrack(VideoStreamTrack):
         if not ret:
             raise Exception("Webcam read failed")
         if self.frames == 0:
-            log("INIT", f"First frame captured from /dev/video{self.device} — encoder pipeline live.")
+            log("INIT", f"First frame captured from camera {self.device} — encoder pipeline live.")
         self.frames += 1
 
         # Overlay identifying text on frame: the friendly hostname (not
@@ -253,9 +255,11 @@ async def run_whip_publisher(server_url, stream_id):
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             pc.addTrack(video_track)
-            log("INIT", f"Webcam opened: {w}x{h} on /dev/video{dev}")
+            device_label = f"AVFoundation camera index {dev}" if platform.system() == "Darwin" else f"/dev/video{dev}"
+            log("INIT", f"Webcam opened: {w}x{h} on {device_label}")
         else:
-            log("INIT", "WARNING: no working webcam found on /dev/video0-3. Streaming without video.")
+            device_range = "AVFoundation camera indices 0-3" if platform.system() == "Darwin" else "/dev/video0-3"
+            log("INIT", f"WARNING: no working webcam found on {device_range}. Streaming without video.")
     except Exception as e:
         log("INIT", f"WARNING: Video initialization failed ({e}).")
 

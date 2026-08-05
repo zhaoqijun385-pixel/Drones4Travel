@@ -56,12 +56,12 @@ Each page registers its own dock buttons through `useDockRegistry()` (a module-l
 
 ## Pages
 
-| Route | Page | Description |
-|-------|------|-------------|
-| `/` | `AerialView.vue` | 3D photorealistic aerial view (Cesium) with collision detection, auto takeoff/landing, and Street View fallback when grounded. |
-| `/map` | `Map2DView.vue` | 2D Google Map with a centered drone icon. |
-| `/satellite` | `Satellite2DView.vue` | 2D Google Satellite view. |
-| `/chat` | `ChatView.vue` | Mission-control chat interface. |
+| Route          | Page                    | Description                                                                                                                    |
+| -------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `/`          | `AerialView.vue`      | 3D photorealistic aerial view (Cesium) with collision detection, auto takeoff/landing, and Street View fallback when grounded. |
+| `/map`       | `Map2DView.vue`       | 2D Google Map with a centered drone icon.                                                                                      |
+| `/satellite` | `Satellite2DView.vue` | 2D Google Satellite view.                                                                                                      |
+| `/chat`      | `ChatView.vue`        | Mission-control chat interface.                                                                                                |
 
 ## Key features
 
@@ -135,15 +135,15 @@ Required APIs to enable on the same key:
 
 #### Google Maps APIs to enable
 
-| API | Purpose in this project |
-|---|---|
-| **Map Tiles API** | Loads Google Photorealistic 3D Tiles in Cesium. |
-| **Maps JavaScript API** | Loads the interactive 2D map and Street View panorama. |
-| **Places API (New)** | Fetches nearby points of interest for waypoint origin selection. The code uses the new `google.maps.places.Place.searchNearby` API. |
-| **Geocoding API** | Converts latitude/longitude to a human-readable address. |
-| **Maps Elevation API** | Samples terrain elevation for route and altitude planning. |
-| **Routes API** | Computes routes between waypoints (required for **Search route**). |
-| **Roads API** | Snaps coordinates to the nearest road for accurate ground routes. |
+| API                           | Purpose in this project                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Map Tiles API**       | Loads Google Photorealistic 3D Tiles in Cesium.                                                                                      |
+| **Maps JavaScript API** | Loads the interactive 2D map and Street View panorama.                                                                               |
+| **Places API (New)**    | Fetches nearby points of interest for waypoint origin selection. The code uses the new`google.maps.places.Place.searchNearby` API. |
+| **Geocoding API**       | Converts latitude/longitude to a human-readable address.                                                                             |
+| **Maps Elevation API**  | Samples terrain elevation for route and altitude planning.                                                                           |
+| **Routes API**          | Computes routes between waypoints (required for**Search route**).                                                              |
+| **Roads API**           | Snaps coordinates to the nearest road for accurate ground routes.                                                                    |
 
 ### 2. Cesium ion access token
 
