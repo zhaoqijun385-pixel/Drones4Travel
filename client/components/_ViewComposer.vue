@@ -18,6 +18,8 @@ defineProps({
   // Real-drone telemetry override for the HUD (Real Drone page); when set,
   // the HUD renders the physical drone's live state instead of the sim rows.
   realTelemetry: { type: Object, default: null },
+  // Keep the HUD clear of AerialView's optional lower-right OpenClaw panel.
+  hudAvoidRight: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
 });
 
@@ -86,7 +88,13 @@ defineEmits([
       @itemClick="$emit('dockItemClick', $event)"
     />
 
-    <HUD v-if="showHud" :flight="flight" :camera="camera" :real="realTelemetry" />
+    <HUD
+      v-if="showHud"
+      :flight="flight"
+      :camera="camera"
+      :real="realTelemetry"
+      :avoid-right="hudAvoidRight"
+    />
   </div>
 </template>
 

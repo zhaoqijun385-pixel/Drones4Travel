@@ -14,5 +14,18 @@
   "link": "Link",
   "live": "live",
   "lost": "lost",
-  "battery": "Battery"
+  "battery": "Battery",
+  "telemetry": "Telemetry",
+  "real": "Real link",
+  "simulation": "Simulation",
+  "simulated": "simulated",
+  "attitude": "Attitude",
+  "power": "Power",
+  "hz": "Hz",
+  "yaw_short": "yaw",
+  "pitch_short": "pitch",
+  "roll_short": "roll",
+  "lat_short": "lat",
+  "lon_short": "lon",
+  "alt_short": "alt"
 }

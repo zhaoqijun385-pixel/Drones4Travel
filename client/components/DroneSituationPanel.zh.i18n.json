@@ -1,0 +1,12 @@
+{
+  "eyebrow": "无人机态势",
+  "target": "目标无人机",
+  "view": "态势视图",
+  "map": "2D 位置",
+  "video": "实时画面",
+  "close": "关闭无人机态势窗口",
+  "no_drone": "未选择无人机",
+  "video_connecting": "正在连接实时画面…",
+  "video_unavailable": "实时画面不可用",
+  "no_stream": "未配置视频流"
+}

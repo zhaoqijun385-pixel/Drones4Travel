@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, watch, h } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
@@ -20,12 +20,207 @@ import { useAuth } from '@shared-composables/useAuth.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
+import OpenClawFlightPanel from '@shared/OpenClawFlightPanel.vue';
+import DroneSituationPanel from '@shared/DroneSituationPanel.vue';
+import { useDroneFleet, isFleetDemoRequested } from '@shared-composables/useDroneFleet.js';
+import { useOpenClaw } from '@shared-composables/useOpenClaw.js';
 
 const { t } = useI18n();
 
 const router = useRouter();
 
 const { drone, gimbal } = useDrone();
+
+// Multi-drone workbench. It is intentionally opt-in so the original single
+// drone experience keeps the same scene graph and animation cost by default.
+const fleet = useDroneFleet();
+const fleetDemoRequested = isFleetDemoRequested();
+fleet.setDemoEnabled(fleetDemoRequested);
+const fleetDemoEnabled = fleet.demoEnabled;
+const fleetDroneRows = computed(() => fleet.drones.value.map((item) => {
+  const latScale = 111_320;
+  const lonScale = latScale * Math.max(0.2, Math.cos((drone.lat * Math.PI) / 180));
+  const dx = (item.lon - drone.lon) * lonScale;
+  const dy = (item.lat - drone.lat) * latScale;
+  const dz = (item.alt || 0) - (drone.alt || 0);
+  return { ...item, distance: Math.sqrt(dx * dx + dy * dy + dz * dz) };
+}));
+const localSituationDrone = computed(() => ({
+  droneId: fleet.localDroneId,
+  name: t('aerialview.situation_local_drone'),
+  color: '#63e6be',
+  lat: drone.lat,
+  lon: drone.lon,
+  alt: drone.alt,
+  yaw: drone.heading,
+  battery: 100,
+  online: true,
+  local: true,
+}));
+const situationDrones = computed(() => (fleetDemoEnabled.value ? fleetDroneRows.value : [localSituationDrone.value]));
+const situationSelectedDroneId = computed(() => (fleetDemoEnabled.value ? fleet.selectedDroneId.value : fleet.localDroneId));
+const situationSelectedDrone = computed(() =>
+  situationDrones.value.find((item) => item.droneId === situationSelectedDroneId.value) || situationDrones.value[0] || null,
+);
+const fleetPerformance = reactive({ fps: 0, objects: 0, visible: 0 });
+const openClawSyncState = ref('');
+const openClawPanelOpen = ref(false);
+const situationPanelOpen = ref(false);
+const situationMode = ref('map');
+const pendingDroneCommand = ref(null);
+const openClawCommandNotice = ref('');
+const {
+  status: openClawStatus,
+  isConnected: openClawConnected,
+  messages: openClawMessages,
+  sendMessage: sendOpenClawMessage,
+  sendFleetContext,
+  connect: connectOpenClaw,
+  close: closeOpenClaw,
+} = useOpenClaw({
+  // OpenClaw is user-triggered from the floating panel. A missing local
+  // gateway must not make fleet mode look like it is permanently loading.
+  autoConnect: false,
+  autoReconnect: false,
+  clientId: 'drone-navigation-fleet-deck',
+});
+
+async function syncFleetToOpenClaw() {
+  if (!fleetDemoEnabled.value) return;
+  if (!openClawConnected.value) {
+    openClawSyncState.value = 'unavailable';
+    return;
+  }
+  openClawSyncState.value = 'syncing';
+  try {
+    await sendFleetContext(fleet.buildOpenClawContext());
+    openClawSyncState.value = 'sent';
+    setTimeout(() => {
+      if (openClawSyncState.value === 'sent') openClawSyncState.value = '';
+    }, 3000);
+  } catch (error) {
+    console.warn('[Fleet] OpenClaw context sync failed:', error);
+    openClawSyncState.value = 'unavailable';
+  }
+}
+
+function selectFleetDrone(droneId) {
+  fleet.selectDrone(droneId);
+}
+
+function selectSituationDrone(droneId) {
+  if (fleetDemoEnabled.value) selectFleetDrone(droneId);
+}
+
+function syncSituationPanelItem() {
+  const item = leftItems.find((entry) => entry.id === 'situation-toggle');
+  if (!item) return;
+  item.active = situationPanelOpen.value;
+  item.titleKey = situationPanelOpen.value
+    ? 'aerialview.situation_close'
+    : 'aerialview.situation_open';
+}
+
+function toggleSituationPanel() {
+  situationPanelOpen.value = !situationPanelOpen.value;
+  syncSituationPanelItem();
+}
+
+function closeSituationPanel() {
+  situationPanelOpen.value = false;
+  syncSituationPanelItem();
+}
+
+function setSituationMode(mode) {
+  if (mode === 'map' || mode === 'video') situationMode.value = mode;
+}
+
+function toggleFleetFollow() {
+  fleet.followSelected.value = !fleet.followSelected.value;
+}
+
+function syncFleetToggleItem() {
+  const item = leftItems.find((entry) => entry.id === 'fleet-toggle');
+  if (!item) return;
+  item.active = fleetDemoEnabled.value;
+  item.titleKey = fleetDemoEnabled.value
+    ? 'aerialview.fleet_disable'
+    : 'aerialview.fleet_enable';
+}
+
+function toggleFleetMode() {
+  const enabled = !fleetDemoEnabled.value;
+  fleet.setDemoEnabled(enabled);
+  if (!enabled) {
+    closeOpenClaw();
+    fleet.followSelected.value = false;
+    if (typeof window.clearDroneFleet === 'function') window.clearDroneFleet();
+  }
+  syncFleetToggleItem();
+}
+
+const commandLabelKeys = {
+  hover: 'aerialview.command_hover',
+  forward: 'aerialview.command_forward',
+  left: 'aerialview.command_left',
+  up: 'aerialview.command_up',
+  land: 'aerialview.command_land',
+};
+
+function toggleOpenClawPanel() {
+  openClawPanelOpen.value = !openClawPanelOpen.value;
+  if (openClawPanelOpen.value && !openClawConnected.value) connectOpenClaw();
+}
+
+function prepareDroneCommand(action) {
+  const selected = fleet.selectedDrone.value;
+  if (!fleetDemoEnabled.value || !selected) {
+    openClawCommandNotice.value = t('aerialview.openclaw_enable_fleet_first');
+    return;
+  }
+  if (selected.local) {
+    openClawCommandNotice.value = t('aerialview.openclaw_remote_only');
+    return;
+  }
+  pendingDroneCommand.value = {
+    droneId: selected.droneId,
+    droneName: selected.name,
+    action,
+    label: t(commandLabelKeys[action] || 'aerialview.command_hover'),
+  };
+  openClawCommandNotice.value = '';
+}
+
+function confirmDroneCommand() {
+  const command = pendingDroneCommand.value;
+  if (!command) return;
+  const applied = fleet.applyDemoCommand(command.droneId, command.action);
+  pendingDroneCommand.value = null;
+  openClawCommandNotice.value = applied
+    ? t('aerialview.openclaw_demo_command_sent', { drone: command.droneName, command: command.label })
+    : t('aerialview.openclaw_command_blocked');
+}
+
+function cancelDroneCommand() {
+  pendingDroneCommand.value = null;
+}
+
+function detectDroneCommand(text) {
+  const normalized = String(text || '').toLowerCase();
+  if (/(不要|别|禁止|don't|do not|not)\s*(降落|land)/i.test(normalized)) return null;
+  if (/(悬停|hover|停在原地)/i.test(normalized)) return 'hover';
+  if (/(前进|向前|forward)/i.test(normalized)) return 'forward';
+  if (/(左移|向左|left)/i.test(normalized)) return 'left';
+  if (/(上升|升高|up|ascend)/i.test(normalized)) return 'up';
+  if (/(降落|着陆|land)/i.test(normalized)) return 'land';
+  return null;
+}
+
+function handleOpenClawMessage(text) {
+  const action = detectDroneCommand(text);
+  if (action) prepareDroneCommand(action);
+  sendOpenClawMessage(text);
+}
 
 // 3D data source of the shared Cesium viewer. The 3D Aerial / 3D Mesh
 // subpages differ ONLY in this source (Google tiles vs OSM Buildings); every
@@ -540,17 +735,43 @@ function projectEnuMove(enuMove, collision) {
   return Cesium.Cartesian3.subtract(enuMove, normalComponent, new Cesium.Cartesian3());
 }
 
-function syncCesiumCamera() {
+const CAMERA_SYNC_INTERVAL_MS = 1000 / 30;
+const CAMERA_POSITION_EPSILON = 0.005;
+const CAMERA_ANGLE_EPSILON = 0.05;
+let lastCesiumCameraSyncTs = 0;
+let lastCesiumCameraState = null;
+
+function angleDistance(a, b) {
+  const delta = Math.abs((Number(a) - Number(b) + 540) % 360 - 180);
+  return delta;
+}
+
+function syncCesiumCamera(now = performance.now()) {
   if (typeof window.updateCesiumCamera === 'function') {
-    window.updateCesiumCamera({
-      lat: drone.lat,
-      lon: drone.lon,
-      alt: drone.alt,
-      heading: drone.heading,
-      gimbalYaw: gimbal.yaw,
-      gimbalPitch: gimbal.pitch,
-      gimbalRoll: gimbal.roll,
-    });
+    const selected = fleet.followSelected.value ? fleet.selectedDrone.value : null;
+    const cameraDrone = selected || drone;
+    const nextState = {
+      lat: Number(cameraDrone.lat),
+      lon: Number(cameraDrone.lon),
+      alt: Number(cameraDrone.alt),
+      heading: Number(cameraDrone.heading ?? cameraDrone.yaw ?? drone.heading),
+      gimbalYaw: selected ? 0 : gimbal.yaw,
+      gimbalPitch: selected ? 0 : gimbal.pitch,
+      gimbalRoll: selected ? 0 : gimbal.roll,
+    };
+    const previous = lastCesiumCameraState;
+    const changed = !previous
+      || Math.abs(nextState.lat - previous.lat) > CAMERA_POSITION_EPSILON / 111_320
+      || Math.abs(nextState.lon - previous.lon) > CAMERA_POSITION_EPSILON / 111_320
+      || Math.abs(nextState.alt - previous.alt) > CAMERA_POSITION_EPSILON
+      || angleDistance(nextState.heading, previous.heading) > CAMERA_ANGLE_EPSILON
+      || angleDistance(nextState.gimbalYaw, previous.gimbalYaw) > CAMERA_ANGLE_EPSILON
+      || Math.abs(nextState.gimbalPitch - previous.gimbalPitch) > CAMERA_ANGLE_EPSILON
+      || Math.abs(nextState.gimbalRoll - previous.gimbalRoll) > CAMERA_ANGLE_EPSILON;
+    if (!changed || now - lastCesiumCameraSyncTs < CAMERA_SYNC_INTERVAL_MS) return;
+    lastCesiumCameraSyncTs = now;
+    lastCesiumCameraState = nextState;
+    window.updateCesiumCamera(nextState);
   }
 }
 
@@ -562,6 +783,41 @@ function getStreetViewPov() {
 }
 
 let rafId = null;
+let fleetRenderTs = 0;
+let fleetFrameCount = 0;
+let fleetPerfTs = 0;
+let fleetStateSignature = '';
+
+function updateFleetLayer(now) {
+  if (!fleetDemoEnabled.value) return;
+  fleetFrameCount += 1;
+  if (now - fleetRenderTs < 50) return; // cap fleet writes at 20 Hz
+  fleetRenderTs = now;
+  fleet.syncLocalDrone(drone);
+  const states = fleet.getRenderStates();
+  const signature = `${fleet.selectedDroneId.value}|${states.map((state) => `${state.droneId}:${state.sequence}:${state.online ? 1 : 0}`).join(',')}`;
+  if (signature === fleetStateSignature) return;
+  fleetStateSignature = signature;
+  if (typeof window.updateDroneFleet === 'function') {
+    window.updateDroneFleet(states, {
+      localDroneId: fleet.localDroneId,
+      selectedDroneId: fleet.selectedDroneId.value,
+      renderDistance: 500,
+      labelDistance: 220,
+    });
+    const stats = typeof window.getDroneFleetStats === 'function'
+      ? window.getDroneFleetStats()
+      : { objects: states.length, visible: states.length };
+    fleetPerformance.objects = stats.objects;
+    fleetPerformance.visible = stats.visible;
+  }
+  if (!fleetPerfTs) fleetPerfTs = now;
+  if (now - fleetPerfTs >= 500) {
+    fleetPerformance.fps = Math.round((fleetFrameCount * 1000) / (now - fleetPerfTs));
+    fleetFrameCount = 0;
+    fleetPerfTs = now;
+  }
+}
 
 function updateDroneState() {
   const dt = 1 / 60;
@@ -640,6 +896,7 @@ function loop() {
       const elapsedMs = performance.now() - loadStartTs;
       assetLoadProgress.value = Math.min(0.9, 0.9 * (1 - Math.exp(-elapsedMs / 1500)));
     }
+    updateFleetLayer(performance.now());
     // During replay the replay engine owns the Cesium camera; skip the flight
     // physics, collision checks and camera sync so they cannot fight it.
     if (recorderState.value !== 'replaying') {
@@ -712,6 +969,27 @@ onMounted(() => {
       activeSubpage.value = 'mesh';
     },
   });
+  registerLeft({
+    id: 'fleet-toggle',
+    icon: 'MENU_DRONE_PLUS',
+    titleKey: fleetDemoEnabled.value ? 'aerialview.fleet_disable' : 'aerialview.fleet_enable',
+    active: fleetDemoEnabled.value,
+    onClick: toggleFleetMode,
+  });
+  registerLeft({
+    id: 'openclaw-float',
+    icon: 'MENU_OPENCLAW',
+    titleKey: 'aerialview.openclaw_open',
+    active: openClawPanelOpen.value,
+    onClick: toggleOpenClawPanel,
+  });
+  registerLeft({
+    id: 'situation-toggle',
+    icon: 'MENU_MAP',
+    titleKey: 'aerialview.situation_open',
+    active: situationPanelOpen.value,
+    onClick: toggleSituationPanel,
+  });
 
   registerRight({
     id: 'steer',
@@ -751,6 +1029,11 @@ onMounted(() => {
   });
   watch(showCamera, (val) => {
     const item = leftItems.find((i) => i.id === 'camera');
+    if (item) item.active = val;
+  });
+  watch(fleetDemoEnabled, syncFleetToggleItem);
+  watch(openClawPanelOpen, (val) => {
+    const item = leftItems.find((entry) => entry.id === 'openclaw-float');
     if (item) item.active = val;
   });
 
@@ -825,6 +1108,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   resetRecorder();
+  if (fleetDemoEnabled.value) {
+    fleet.setDemoEnabled(false);
+    if (typeof window.clearDroneFleet === 'function') window.clearDroneFleet();
+  }
   stopFlightKeyboard();
   stopCameraKeyboard();
   if (rafId) cancelAnimationFrame(rafId);
@@ -848,7 +1135,8 @@ onUnmounted(() => {
     :show-hud="recorderState !== 'replaying'"
     :flight="flight"
     :camera="camera"
-        :disabled="isAutoActive"
+    :hud-avoid-right="openClawPanelOpen"
+    :disabled="isAutoActive"
     @flightMove="onFlightMove"
     @flightStop="onFlightStop"
     @flightModeChange="onFlightModeChange"
@@ -872,7 +1160,75 @@ onUnmounted(() => {
     </template>
 
     <template #top-overlay>
+      <DroneSituationPanel
+        :open="situationPanelOpen"
+        :mode="situationMode"
+        :drones="situationDrones"
+        :selected-drone-id="situationSelectedDroneId"
+        :selected-drone="situationSelectedDrone"
+        @close="closeSituationPanel"
+        @mode-change="setSituationMode"
+        @select-drone="selectSituationDrone"
+      />
       <ConnectionError :visible="showConnectionError" :message="connectionMessage" />
+      <OpenClawFlightPanel
+        :open="openClawPanelOpen"
+        :status="openClawStatus"
+        :is-connected="openClawConnected"
+        :messages="openClawMessages"
+        :drones="fleetDroneRows"
+        :selected-drone-id="fleet.selectedDroneId.value"
+        :selected-drone="fleet.selectedDrone.value"
+        :fleet-enabled="fleetDemoEnabled"
+        :pending-command="pendingDroneCommand"
+        :notice="openClawCommandNotice"
+        @close="openClawPanelOpen = false"
+        @connect="connectOpenClaw"
+        @send="handleOpenClawMessage"
+        @select-drone="selectFleetDrone"
+        @prepare-command="prepareDroneCommand"
+        @confirm-command="confirmDroneCommand"
+        @cancel-command="cancelDroneCommand"
+      />
+      <section v-if="fleetDemoEnabled" class="fleet-panel" aria-label="Multi-drone flight deck">
+        <header class="fleet-panel__header">
+          <div>
+            <span class="fleet-panel__eyebrow">{{ t('aerialview.fleet_mode') }}</span>
+            <strong>{{ t('aerialview.fleet_title') }}</strong>
+          </div>
+          <span class="fleet-panel__status" :class="`fleet-panel__status--${openClawStatus}`">
+            {{ openClawConnected ? t('aerialview.openclaw_connected') : t('aerialview.openclaw_offline') }}
+          </span>
+        </header>
+        <div class="fleet-panel__metrics">
+          <span><b>{{ fleetDroneRows.length }}</b> {{ t('aerialview.fleet_drones') }}</span>
+          <span><b>{{ fleetPerformance.visible }}</b> {{ t('aerialview.fleet_visible') }}</span>
+          <span><b>{{ fleetPerformance.fps || 0 }}</b> FPS</span>
+        </div>
+        <div class="fleet-panel__actions">
+          <button type="button" @click="toggleFleetFollow">
+            {{ fleet.followSelected.value ? t('aerialview.fleet_unfollow') : t('aerialview.fleet_follow') }}
+          </button>
+          <button type="button" :disabled="!openClawConnected || openClawSyncState === 'syncing'" @click="syncFleetToOpenClaw">
+            {{ openClawSyncState === 'syncing' ? t('aerialview.openclaw_syncing') : t('aerialview.openclaw_sync') }}
+          </button>
+        </div>
+        <div class="fleet-panel__list">
+          <button
+            v-for="item in fleetDroneRows"
+            :key="item.droneId"
+            type="button"
+            class="fleet-panel__drone"
+            :class="{ 'fleet-panel__drone--selected': item.droneId === fleet.selectedDroneId.value, 'fleet-panel__drone--local': item.local }"
+            @click="selectFleetDrone(item.droneId)"
+          >
+            <span class="fleet-panel__dot" :style="{ backgroundColor: item.color }" />
+            <span class="fleet-panel__drone-name">{{ item.name }}</span>
+            <span class="fleet-panel__drone-meta">{{ item.battery.toFixed(0) }}% · {{ item.distance.toFixed(0) }}m</span>
+          </button>
+        </div>
+        <p class="fleet-panel__hint">{{ t('aerialview.fleet_demo_hint') }}</p>
+      </section>
       <CollisionWarning :visible="isCollisionFrozen" />
       <div v-if="collisionPausedMessage" class="top-center-message top-center-message--warning">
         {{ collisionPausedMessage }}
@@ -930,6 +1286,200 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+:global(:root) {
+  --fleet-cyan: #53b7ff;
+  --fleet-mint: #63e6be;
+  --fleet-panel: rgba(5, 16, 27, 0.82);
+}
+
+.fleet-panel {
+  position: fixed;
+  top: 24px;
+  right: 94px;
+  z-index: 60;
+  width: min(360px, calc(100vw - 150px));
+  padding: 14px;
+  border: 1px solid rgba(83, 183, 255, 0.35);
+  border-radius: 12px;
+  background: var(--fleet-panel);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.32), inset 0 1px rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  color: rgba(239, 248, 255, 0.92);
+  font-family: 'Courier New', Courier, monospace;
+  pointer-events: auto;
+}
+
+.fleet-panel__header,
+.fleet-panel__metrics,
+.fleet-panel__actions,
+.fleet-panel__drone {
+  display: flex;
+  align-items: center;
+}
+
+.fleet-panel__header {
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.fleet-panel__header strong,
+.fleet-panel__eyebrow {
+  display: block;
+}
+
+.fleet-panel__eyebrow {
+  margin-bottom: 4px;
+  color: var(--fleet-cyan);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.fleet-panel__header strong {
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+.fleet-panel__status {
+  flex-shrink: 0;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.16);
+  font-size: 0.62rem;
+  white-space: nowrap;
+}
+
+.fleet-panel__status--connecting,
+.fleet-panel__status--closed,
+.fleet-panel__status--error,
+.fleet-panel__status--idle {
+  color: #f8d789;
+  background: rgba(234, 179, 8, 0.14);
+}
+
+.fleet-panel__metrics {
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 0;
+  color: rgba(206, 228, 242, 0.68);
+  font-size: 0.62rem;
+}
+
+.fleet-panel__metrics b {
+  color: var(--fleet-mint);
+  font-size: 0.82rem;
+}
+
+.fleet-panel__actions {
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.fleet-panel__actions button {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(83, 183, 255, 0.32);
+  border-radius: 7px;
+  color: #dff4ff;
+  background: rgba(83, 183, 255, 0.1);
+  font: inherit;
+  font-size: 0.64rem;
+  cursor: pointer;
+}
+
+.fleet-panel__actions button:hover:not(:disabled),
+.fleet-panel__actions button:focus-visible {
+  border-color: var(--fleet-cyan);
+  background: rgba(83, 183, 255, 0.22);
+  outline: none;
+}
+
+.fleet-panel__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.fleet-panel__list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  max-height: 230px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.fleet-panel__drone {
+  min-width: 0;
+  gap: 6px;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: rgba(239, 248, 255, 0.8);
+  background: rgba(255, 255, 255, 0.04);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fleet-panel__drone:hover,
+.fleet-panel__drone--selected {
+  border-color: rgba(83, 183, 255, 0.6);
+  background: rgba(83, 183, 255, 0.16);
+}
+
+.fleet-panel__drone--local {
+  border-color: rgba(99, 230, 190, 0.32);
+}
+
+.fleet-panel__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.fleet-panel__drone-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-panel__drone-meta {
+  color: rgba(206, 228, 242, 0.58);
+  font-size: 0.58rem;
+  white-space: nowrap;
+}
+
+.fleet-panel__hint {
+  margin: 9px 0 0;
+  color: rgba(206, 228, 242, 0.54);
+  font-family: Calibri, 'Segoe UI', sans-serif;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 768px) {
+  .fleet-panel {
+    top: 14px;
+    right: 82px;
+    width: min(300px, calc(100vw - 98px));
+    padding: 10px;
+  }
+
+  .fleet-panel__list {
+    max-height: 176px;
+  }
+}
+
 :deep(.view-composer__background) {
   position: fixed;
   inset: 0;

@@ -1,0 +1,12 @@
+{
+  "eyebrow": "Drone situation",
+  "target": "Target drone",
+  "view": "Situation view",
+  "map": "2D position",
+  "video": "Live view",
+  "close": "Close drone situation window",
+  "no_drone": "No drone selected",
+  "video_connecting": "Connecting to live view…",
+  "video_unavailable": "Live view unavailable",
+  "no_stream": "No stream configured"
+}

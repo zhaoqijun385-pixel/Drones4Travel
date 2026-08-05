@@ -63,7 +63,7 @@ function isHeartbeatPrefix(text) {
   return t.length > 0 && HEARTBEAT_TEXT.startsWith(t);
 }
 
-export function useOpenClaw() {
+export function useOpenClaw({ autoConnect = true, autoReconnect = true, clientId = 'openclaw-control-ui' } = {}) {
   const ws = ref(null);
   const status = ref('idle'); // idle | connecting | connected | error | closed
   const error = ref(null);
@@ -153,7 +153,7 @@ export function useOpenClaw() {
         minProtocol: 4,
         maxProtocol: 4,
         client: {
-          id: 'openclaw-control-ui',
+          id: clientId,
           version: '1.0.0',
           platform: 'web',
           mode: 'webchat',
@@ -287,10 +287,10 @@ export function useOpenClaw() {
 
   async function sendMessage(text) {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed) return false;
     if (!isConnected.value || !sessionKey.value) {
       error.value = 'Not connected to OpenClaw gateway';
-      return;
+      return false;
     }
 
     appendMessage({
@@ -306,13 +306,30 @@ export function useOpenClaw() {
         message: trimmed,
         idempotencyKey: generateId(),
       });
+      return true;
     } catch (e) {
       error.value = e.message || 'Failed to send message';
+      return false;
     }
   }
 
+  // Explicit, user-triggered bridge from the flight deck to OpenClaw. The
+  // payload is read-only context; it never calls the flight-command socket.
+  async function sendFleetContext(context) {
+    const payload = JSON.stringify(context);
+    const sent = await sendMessage(
+      `[DRONE_FLEET_CONTEXT]\n${payload}\n[/DRONE_FLEET_CONTEXT]\n` +
+      'Use this as read-only situational context. Do not issue flight commands from this message.'
+    );
+    if (!sent) throw new Error('OpenClaw context was not sent');
+    return sent;
+  }
+
   function connect() {
-    if (ws.value || intentionallyClosed) return;
+    if (ws.value) return;
+    // Manual reconnect after an intentional close is allowed. The existing
+    // auto-reconnect path still remains gated by intentionallyClosed.
+    intentionallyClosed = false;
     status.value = 'connecting';
     error.value = null;
     challengeResolved = false;
@@ -345,7 +362,7 @@ export function useOpenClaw() {
   }
 
   function scheduleReconnect() {
-    if (reconnectTimer || intentionallyClosed) return;
+    if (!autoReconnect || reconnectTimer || intentionallyClosed) return;
     status.value = 'closed';
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -372,7 +389,7 @@ export function useOpenClaw() {
     pendingRequests.clear();
   });
 
-  connect();
+  if (autoConnect) connect();
 
   return {
     status,
@@ -380,6 +397,7 @@ export function useOpenClaw() {
     messages,
     isConnected,
     sendMessage,
+    sendFleetContext,
     connect,
     close,
   };

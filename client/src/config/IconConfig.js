@@ -42,6 +42,7 @@ export const IconMap = {
   MENU_FINGER_TAP: '../../icons/finger-tap.svg',
   MENU_REMOTE_CONTROLLER: '../../icons/remote_controller.svg',
   MENU_DRONE_PLUS: '../../icons/drone_plus.svg',
+  MENU_OPENCLAW: '../../icons/openclaw.svg',
   MENU_LIVESTREAM_VIEWER: '../../icons/livestream_viewer.svg',
   MENU_LIVESTREAM_HOST: '../../icons/livestream_host.svg',
   MENU_WINDOW_SIZE: '../../icons/window_size.svg',

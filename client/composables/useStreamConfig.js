@@ -33,7 +33,53 @@ const FALLBACK_STREAMS = [
   },
 ];
 
-const streams = ref(FALLBACK_STREAMS);
+const STREAM_CACHE_KEY = 'drone-navigation:stream-config:v1';
+const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
+const STREAM_CACHE_STALE_MS = 24 * 60 * 60 * 1000;
+
+function readCachedStreams() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(STREAM_CACHE_KEY);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    const age = Date.now() - Number(cached.savedAt || 0);
+    if (!Array.isArray(cached.streams) || !Number.isFinite(age) || age > STREAM_CACHE_STALE_MS) return null;
+    const list = normalize(cached.streams);
+    return list.length ? list : null;
+  } catch {
+    return null;
+  }
+}
+
+function cacheStreams(list) {
+  if (typeof window === 'undefined' || !Array.isArray(list) || !list.length) return;
+  try {
+    window.localStorage.setItem(STREAM_CACHE_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      streams: list,
+    }));
+  } catch {
+    // Private browsing or a full storage quota should not block playback.
+  }
+}
+
+function hasFreshCachedStreams() {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = window.localStorage.getItem(STREAM_CACHE_KEY);
+    if (!raw) return false;
+    const cached = JSON.parse(raw);
+    const age = Date.now() - Number(cached.savedAt || 0);
+    return Array.isArray(cached.streams) && Number.isFinite(age) && age <= STREAM_CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+// Use the last known catalog immediately, then refresh it in the background.
+// This prevents a slow API/config request from delaying the first video view.
+const streams = ref(readCachedStreams() || FALLBACK_STREAMS);
 // Primary stream's WHEP URL (first catalog entry), kept for backward
 // compatibility with single-stream consumers.
 const whepUrl = computed(() => streams.value[0]?.whep_url || '');
@@ -62,18 +108,27 @@ function normalize(list) {
 export function useStreamConfig() {
   if (!requested) {
     requested = true;
-    fetch(`${API_BASE}/api/stream/config`)
+    if (hasFreshCachedStreams()) return { streams, whepUrl };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    fetch(`${API_BASE}/api/stream/config`, { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (!data) return;
         if (Array.isArray(data.streams) && data.streams.length) {
           const list = normalize(data.streams);
-          if (list.length) streams.value = list;
+          if (list.length) {
+            streams.value = list;
+            cacheStreams(list);
+          }
         } else if (data.whep_url) {
-          streams.value = legacyStream(data.whep_url);
+          const list = legacyStream(data.whep_url);
+          streams.value = list;
+          cacheStreams(list);
         }
       })
-      .catch(() => { /* keep the fallback catalog */ });
+      .catch(() => { /* keep the cached/fallback catalog */ })
+      .finally(() => clearTimeout(timeout));
   }
   return { streams, whepUrl };
 }

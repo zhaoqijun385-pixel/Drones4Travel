@@ -14,5 +14,18 @@
   "link": "链路",
   "live": "在线",
   "lost": "断开",
-  "battery": "电池"
+  "battery": "电池",
+  "telemetry": "遥测",
+  "real": "实机链路",
+  "simulation": "仿真模式",
+  "simulated": "仿真",
+  "attitude": "姿态",
+  "power": "电源",
+  "hz": "Hz",
+  "yaw_short": "偏航",
+  "pitch_short": "俯仰",
+  "roll_short": "横滚",
+  "lat_short": "纬度",
+  "lon_short": "经度",
+  "alt_short": "高度"
 }

@@ -84,6 +84,120 @@ const viewer = new Cesium.Viewer('cesiumContainer', {
     })
 });
 
+// ── Optional multi-drone flight-deck layer ────────────────────────────────
+// Uses a small, cached Entity set instead of creating a model per telemetry
+// packet. Cesium handles the normal view-frustum traversal; this layer adds a
+// conservative distance cutoff and hides labels earlier than points so the
+// mobile path stays cheap. It is only updated when the Vue flight deck opts in
+// with ?fleet=demo, so the original single-drone scene is unchanged by default.
+const fleetEntities = new Map();
+const fleetColors = new Map();
+let fleetStats = { objects: 0, visible: 0 };
+
+function fleetColor(value, fallback = '#53b7ff') {
+    const key = String(value || fallback);
+    if (!fleetColors.has(key)) fleetColors.set(key, Cesium.Color.fromCssColorString(key));
+    return fleetColors.get(key);
+}
+
+function createFleetEntity(state) {
+    const color = fleetColor(state.color);
+    const entity = viewer.entities.add({
+        id: `fleet:${state.droneId}`,
+        position: Cesium.Cartesian3.fromDegrees(state.lon, state.lat, state.alt),
+        point: {
+            pixelSize: state.local ? 14 : 10,
+            color,
+            outlineColor: Cesium.Color.WHITE.withAlpha(0.88),
+            outlineWidth: state.local ? 3 : 1,
+            disableDepthTestDistance: 500,
+        },
+        label: {
+            text: state.name || state.droneId,
+            font: '600 12px Calibri, sans-serif',
+            fillColor: color,
+            outlineColor: Cesium.Color.BLACK.withAlpha(0.86),
+            outlineWidth: 3,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            pixelOffset: new Cesium.Cartesian2(0, -18),
+            disableDepthTestDistance: 500,
+            show: false,
+        },
+    });
+    entity._fleetPosition = new Cesium.Cartesian3();
+    entity._fleetLastColor = state.color;
+    entity._fleetLastName = state.name;
+    fleetEntities.set(state.droneId, entity);
+    return entity;
+}
+
+window.updateDroneFleet = function updateDroneFleet(states = [], options = {}) {
+    const list = Array.isArray(states) ? states : [];
+    const local = list.find((state) => state.droneId === options.localDroneId) || list.find((state) => state.local);
+    const localPosition = local
+        ? Cesium.Cartesian3.fromDegrees(local.lon, local.lat, local.alt)
+        : null;
+    const liveIds = new Set();
+    let visible = 0;
+    const renderDistance = Number(options.renderDistance || 500);
+    const labelDistance = Number(options.labelDistance || 220);
+
+    list.forEach((state) => {
+        if (!state || !state.droneId || !Number.isFinite(Number(state.lat)) || !Number.isFinite(Number(state.lon))) return;
+        liveIds.add(state.droneId);
+        const entity = fleetEntities.get(state.droneId) || createFleetEntity(state);
+        const position = Cesium.Cartesian3.fromDegrees(
+            Number(state.lon),
+            Number(state.lat),
+            Math.max(0, Number(state.alt) || 0),
+            Cesium.Ellipsoid.WGS84,
+            entity._fleetPosition,
+        );
+        const distance = localPosition ? Cesium.Cartesian3.distance(localPosition, position) : 0;
+        const inRange = Boolean(state.online !== false) && distance <= renderDistance;
+        entity.position.setValue(position);
+        entity.show = inRange;
+        entity.point.show = inRange;
+        entity.label.show = inRange && distance <= labelDistance;
+        if (state.name !== entity._fleetLastName) {
+            entity.label.text = state.name || state.droneId;
+            entity._fleetLastName = state.name;
+        }
+        if (state.color !== entity._fleetLastColor) {
+            const color = fleetColor(state.color);
+            entity.point.color = color;
+            entity.label.fillColor = color;
+            entity._fleetLastColor = state.color;
+        }
+        if (state.droneId === options.selectedDroneId) {
+            entity.point.pixelSize = state.local ? 18 : 14;
+            entity.point.outlineWidth = 3;
+        } else {
+            entity.point.pixelSize = state.local ? 14 : 10;
+            entity.point.outlineWidth = state.local ? 3 : 1;
+        }
+        if (inRange) visible += 1;
+    });
+
+    fleetEntities.forEach((entity, droneId) => {
+        if (!liveIds.has(droneId)) {
+            viewer.entities.remove(entity);
+            fleetEntities.delete(droneId);
+        }
+    });
+    fleetStats = { objects: list.length, visible };
+};
+
+window.clearDroneFleet = function clearDroneFleet() {
+    fleetEntities.forEach((entity) => viewer.entities.remove(entity));
+    fleetEntities.clear();
+    fleetStats = { objects: 0, visible: 0 };
+};
+
+window.getDroneFleetStats = function getDroneFleetStats() {
+    return { ...fleetStats };
+};
+
 // Explicitly hide the underlying base globe surface to expose clean Google Meshes.
 // If the photorealistic tileset fails to load, we re-enable the globe as a fallback.
 viewer.scene.globe.show = false;
@@ -260,7 +374,12 @@ async function loadArena() {
     // signal — it becomes true only when every tile needed for the current
     // view is loaded AND drawn. The splash keeps playing until then (with a
     // safety cap) so the user never lands on an empty sky.
-    await waitForTilesRendered(googleTileset);
+    // Fleet demo is explicitly opt-in. On that path, do not make the whole
+    // page wait 45 seconds for a weak-network tile refinement wave; let the
+    // scene appear and allow Cesium to keep refining in the background. The
+    // default single-drone path keeps the original full-render wait.
+    const fleetDemo = new URLSearchParams(window.location.search).get('fleet') === 'demo';
+    await waitForTilesRendered(googleTileset, fleetDemo ? 12000 : 45000);
 
     // Signal splash screen that Cesium 3D scene is ready with tiles rendered
     window.dispatchEvent(new CustomEvent('cesiumReady'));
