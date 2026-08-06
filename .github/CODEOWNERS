@@ -1,0 +1,14 @@
+# Code Owners for Drone Navigation (Drones4Travel)
+# Last matching pattern takes precedence.
+
+# Default owner for everything
+* @cccp-anq
+
+# Safety-critical: drone bridge, flight commands, motion control, e-stop
+extension/crazyflie_bridge/ @cccp-anq
+server/app/drone_commands.py @cccp-anq
+server/app/fleet.py @cccp-anq
+
+# CI and governance files
+.github/ @cccp-anq
+CONTRIBUTING.md @cccp-anq
