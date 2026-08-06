@@ -48,6 +48,7 @@
   "camera_top": "Top",
   "camera_overview": "Overview",
   "camera_distance": "Camera distance",
+  "takeoff_altitude": "Selected drone takeoff altitude",
   "search": "Search name or ID",
   "locate": "Locate and follow this drone",
   "me": "My position",

@@ -33,6 +33,7 @@ const emit = defineEmits([
   'focus-drone',
   'camera-mode-change',
   'camera-range-change',
+  'set-takeoff-altitude',
   'navigate-to',
   'gather',
 ]);
@@ -44,9 +45,11 @@ const name = ref('');
 const type = ref('demo');
 const query = ref('');
 const targetDroneId = ref('');
+const altitudeDraft = ref(100);
 
 const selected = computed(() =>
   props.drones.find((drone) => drone.droneId === props.selectedDroneId) || props.drones[0] || null);
+const selectedTakeoffAltitude = computed(() => Number(selected.value?.takeoffAltitude) || 100);
 const remoteCount = computed(() => props.drones.filter((drone) => !drone.local).length);
 const missionProgress = computed(() => Math.round(Number(selected.value?.missionProgress || 0) * 100));
 const visibleDrones = computed(() => {
@@ -72,6 +75,17 @@ watch(navigationTargets, () => {
   }
 });
 
+watch(
+  selectedTakeoffAltitude,
+  (value) => {
+    altitudeDraft.value = value;
+  },
+  { immediate: true },
+);
+watch(() => props.selectedDroneId, () => {
+  altitudeDraft.value = selectedTakeoffAltitude.value;
+});
+
 function addDrone() {
   emit('add-drone', { name: name.value.trim(), type: type.value });
   name.value = '';
@@ -94,6 +108,10 @@ function requestRemove(droneId) {
 function statusLabel(drone) {
   const phase = drone?.phase || (drone?.online === false ? 'offline' : 'parked');
   return t(`fleettray.phase_${phase}`);
+}
+
+function commitAltitude() {
+  emit('set-takeoff-altitude', altitudeDraft.value);
 }
 </script>
 
@@ -162,6 +180,24 @@ function statusLabel(drone) {
       <div class="fleet-tray__filter">
         <input v-model="query" type="search" :placeholder="t('fleettray.search')" :aria-label="t('fleettray.search')">
         <span>{{ visibleDrones.length }}/{{ drones.length }}</span>
+      </div>
+
+      <div v-if="selected" class="fleet-tray__selected-settings">
+        <label>
+          <span>{{ t('fleettray.takeoff_altitude') }}</span>
+          <input
+            type="number"
+            min="20"
+            max="10000"
+            step="10"
+            v-model.number="altitudeDraft"
+            :aria-label="t('fleettray.takeoff_altitude')"
+            @change="commitAltitude"
+            @blur="commitAltitude"
+            @keyup.enter.prevent="commitAltitude"
+          >
+          <b>m</b>
+        </label>
       </div>
 
       <div class="fleet-tray__list">
@@ -348,6 +384,11 @@ function statusLabel(drone) {
 .fleet-tray__filter { display: flex; align-items: center; gap: 7px; padding: 7px 10px 2px; }
 .fleet-tray__filter input { min-width: 0; flex: 1; padding: 6px 8px; border: 1px solid #244252; border-radius: 5px; color: #eaf6fb; background: #07111b; font-size: 0.64rem; }
 .fleet-tray__filter span { color: #7893a0; font: 0.58rem "SFMono-Regular", Consolas, monospace; }
+
+.fleet-tray__selected-settings { padding: 5px 10px 3px; }
+.fleet-tray__selected-settings label { display: flex; align-items: center; gap: 7px; color: #7893a0; font-size: 0.6rem; }
+.fleet-tray__selected-settings input { width: 70px; margin-left: auto; padding: 4px 6px; border: 1px solid #244252; border-radius: 5px; color: #eaf6fb; background: #07111b; font-size: 0.62rem; }
+.fleet-tray__selected-settings b { color: #6dc7e8; font: 0.6rem "SFMono-Regular", Consolas, monospace; }
 
 .fleet-tray__list { max-height: min(290px, 34vh); overflow: auto; padding: 4px 6px 6px; }
 .fleet-tray__drone { position: relative; margin: 3px 0; border: 1px solid transparent; border-radius: 7px; background: rgba(255, 255, 255, 0.035); }

@@ -10,6 +10,7 @@ import {
   planNavigateMission,
   routePolyline,
 } from './fleetMissionPlanner.js';
+import { advanceManualFlight, applyManualFlightMove } from './fleetManualFlight.js';
 
 // The fleet layer is deliberately opt-in. The existing single-drone aerial
 // view keeps its original render path unless the URL contains ?fleet=demo.
@@ -84,6 +85,7 @@ function createDrone({
   type = 'demo',
   agentId = '',
   agentStatus = 'not_created',
+  takeoffAltitude = Number(settings.takeoffAltitude) || 100,
 }) {
   return {
     droneId,
@@ -114,6 +116,11 @@ function createDrone({
     missionProgress: 0,
     missionTarget: '',
     route: [],
+    autoTargetZ: null,
+    autoAction: '',
+    // Each aircraft keeps its own target height. This prevents changing the
+    // selected aircraft from silently reusing another aircraft's setting.
+    takeoffAltitude: clamp(Number(takeoffAltitude) || Number(settings.takeoffAltitude) || 100, 20, 10000),
     agentId,
     agentStatus,
   };
@@ -143,6 +150,7 @@ function persistProfiles() {
       homeZ: Number(drone.homeZ || 0.12),
       agentId: drone.agentId || '',
       agentStatus: drone.agentStatus || 'not_created',
+      takeoffAltitude: Number(drone.takeoffAltitude) || Number(settings.takeoffAltitude) || 100,
     }));
   window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(value));
 }
@@ -186,6 +194,7 @@ function restoreProfiles() {
       ...home,
       z: home.z,
       color: profile.color || '#6dc7e8',
+      takeoffAltitude: profile.takeoffAltitude,
     });
     Object.assign(restored, metresToGeo(home.x, home.y));
     drones[profile.droneId] = restored;
@@ -211,11 +220,24 @@ function seedDemoFleet(count = 4) {
 
 function tickDemoFleet() {
   if (!demoEnabled.value) return;
-  const mission = activeMission.value;
-  if (!mission) return;
   const now = Date.now();
   const delta = demoMissionLastTickAt ? now - demoMissionLastTickAt : DEMO_INTERVAL_MS;
   demoMissionLastTickAt = now;
+
+  // Manual takeoff/landing uses the same 8 m/s vertical rate as the original
+  // single-drone altitude gate. It continues while another drone is selected.
+  Object.values(drones).forEach((drone) => {
+    if (drone.local) return;
+    const next = advanceManualFlight(drone, delta, fleetAltitudeOrigin);
+    if (!next) return;
+    Object.assign(drone, next);
+    drone.battery = Math.max(30, drone.battery - 0.002);
+    drone.sequence += 1;
+    drone.timestamp = now;
+  });
+
+  const mission = activeMission.value;
+  if (!mission) return;
   let completeCount = 0;
   advanceMission(mission, Object.values(drones), delta).forEach((next) => {
     const drone = drones[next.droneId];
@@ -254,10 +276,12 @@ function setDemoEnabled(enabled, { seedCount = 0 } = {}) {
   if (next) {
     restoreProfiles();
     if (seedCount > 0) seedDemoFleet(seedCount);
+    demoMissionLastTickAt = Date.now();
     demoTimer = setInterval(tickDemoFleet, DEMO_INTERVAL_MS);
   } else {
     if (demoTimer) clearInterval(demoTimer);
     demoTimer = null;
+    demoMissionLastTickAt = 0;
     selectedDroneId.value = LOCAL_DRONE_ID;
     followSelected.value = false;
     sharedTarget.value = null;
@@ -656,6 +680,8 @@ function startDemoMission(presetId = 'inspection') {
   mission.routes.forEach((route) => {
     const drone = drones[route.droneId];
     if (!drone) return;
+    drone.autoTargetZ = null;
+    drone.autoAction = '';
     drone.route = routePolyline(route).map((point) => ({
       ...point,
       ...metresToGeo(point.x, point.y),
@@ -676,6 +702,8 @@ function activatePlannedMission(mission) {
   if (!mission?.routes?.length) return false;
   Object.values(drones).forEach((drone) => {
     if (drone.local) return;
+    drone.autoTargetZ = null;
+    drone.autoAction = '';
     drone.route = [];
     drone.missionProgress = 0;
     drone.missionTarget = '';
@@ -745,21 +773,28 @@ function applyDemoCommand(droneId, action) {
   if (!demoEnabled.value || droneId === LOCAL_DRONE_ID) return false;
   const drone = drones[droneId];
   if (!drone || !drone.online) return false;
-  if (action === 'hover') {
-    drone.phase = 'holding';
+  if (action === 'takeoff') {
+    const targetZ = Math.max(0.12, Number(drone.takeoffAltitude) || Number(settings.takeoffAltitude) || 100);
+    if (drone.z >= targetZ - 0.2) return false;
+    drone.autoTargetZ = targetZ;
+    drone.autoAction = 'takeoff';
+    drone.phase = 'takeoff';
+  } else if (action === 'hover' || action === 'stop') {
+    drone.autoTargetZ = null;
+    drone.autoAction = '';
+    drone.phase = drone.z <= 0.2 ? 'parked' : 'holding';
   } else if (action === 'forward') {
-    drone.y += 2;
-    drone.phase = 'holding';
+    Object.assign(drone, applyManualFlightMove(drone, { y: 2 }, fleetAltitudeOrigin));
   } else if (action === 'left') {
-    drone.x -= 2;
-    drone.phase = 'holding';
+    Object.assign(drone, applyManualFlightMove(drone, { x: -2 }, fleetAltitudeOrigin));
   } else if (action === 'up') {
-    drone.z = Math.min(12, drone.z + 1);
-    drone.phase = 'holding';
+    Object.assign(drone, applyManualFlightMove(drone, { z: 1 }, fleetAltitudeOrigin));
   } else if (action === 'land') {
-    drone.z = 0.12;
+    if (drone.z <= 0.2) return false;
+    drone.autoTargetZ = 0.12;
+    drone.autoAction = 'land';
     drone.online = true;
-    drone.phase = 'parked';
+    drone.phase = 'landing';
   } else {
     return false;
   }
@@ -767,6 +802,30 @@ function applyDemoCommand(droneId, action) {
   drone.alt = fleetAltitudeOrigin + drone.z;
   drone.sequence += 1;
   drone.timestamp = Date.now();
+  return true;
+}
+
+// Route the shared flight disk/keyboard to the selected remote demo aircraft.
+// The local altitude gate is intentionally not involved in this path.
+function applyDemoMove(droneId, enuMove, { yawDelta = 0 } = {}) {
+  if (!demoEnabled.value || droneId === LOCAL_DRONE_ID) return false;
+  const drone = drones[droneId];
+  if (!drone || !drone.online) return false;
+  const next = applyManualFlightMove(drone, enuMove, fleetAltitudeOrigin, yawDelta);
+  if (!next) return false;
+  Object.assign(drone, next, metresToGeo(next.x, next.y));
+  drone.battery = Math.max(30, drone.battery - 0.001);
+  drone.sequence += 1;
+  drone.timestamp = Date.now();
+  return true;
+}
+
+function setDroneTakeoffAltitude(droneId, value) {
+  const drone = drones[droneId];
+  if (!drone) return false;
+  const next = clamp(Number(value) || Number(settings.takeoffAltitude) || 100, 20, 10000);
+  drone.takeoffAltitude = next;
+  persistProfiles();
   return true;
 }
 
@@ -837,12 +896,14 @@ export function useDroneFleet() {
     addDrone,
     removeDrone,
     updateDroneAgent,
+    setDroneTakeoffAltitude,
     startDemoMission,
     navigateDroneTo,
     gatherAt,
     stopDemoMission,
     setSharedTarget,
     applyDemoCommand,
+    applyDemoMove,
     getRenderStates,
     buildOpenClawContext,
   };
@@ -850,5 +911,7 @@ export function useDroneFleet() {
 
 export function isFleetDemoRequested() {
   if (typeof window === 'undefined') return false;
-  return new URLSearchParams(window.location.search).get('fleet') === 'demo';
+  // The flight deck is now the default experience. `?fleet=off` remains as a
+  // lightweight escape hatch for single-drone/GPU troubleshooting.
+  return new URLSearchParams(window.location.search).get('fleet') !== 'off';
 }

@@ -93,7 +93,9 @@ function syncFleetMarkers() {
     marker.setZIndex(selected ? 1000 : 100);
     marker.setIcon({
       path: mapsApi.SymbolPath.FORWARD_CLOSED_ARROW,
-      rotation: Number(drone.heading ?? drone.yaw ?? 0),
+      // Fleet yaw is the canonical north-clockwise heading. Prefer it when a
+      // live record also carries a legacy/stale `heading` field.
+      rotation: Number(drone.yaw ?? drone.heading ?? 0),
       fillColor: drone.color || '#38bdf8',
       fillOpacity: 1,
       strokeColor: selected ? '#ffffff' : '#d9f6ff',

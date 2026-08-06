@@ -64,6 +64,11 @@ function syncMapPoint() {
   mapPoint.heading = numberOr(drone.yaw, numberOr(drone.heading, mapPoint.heading));
 }
 
+function selectDrone(droneId) {
+  mapScope.value = 'selected';
+  emit('select-drone', droneId);
+}
+
 function stopMapPointTimer() {
   if (mapPointTimer) {
     clearInterval(mapPointTimer);
@@ -165,6 +170,13 @@ watch([() => props.open, () => props.mode], ([open, mode]) => {
 watch([() => props.open, () => props.mode], syncMapPointTimer, { immediate: true });
 watch([() => props.open, () => props.mode, targetUrl], syncVideo, { immediate: true });
 watch(selected, syncMapPoint);
+watch(() => props.selectedDroneId, () => {
+  // A fleet selection is an explicit request to inspect that aircraft. Move
+  // the inset map out of overview mode so its center/zoom follows the same
+  // selected state as the 3D camera and HUD.
+  mapScope.value = 'selected';
+  syncMapPoint();
+});
 
 onMounted(() => {
   const warm = () => {
@@ -207,7 +219,7 @@ onUnmounted(() => {
     <div class="situation-panel__controls">
       <label class="situation-panel__target">
         <span>{{ t('dronesituationpanel.target') }}</span>
-        <select :value="selectedDroneId" :disabled="!drones.length" @change="emit('select-drone', $event.target.value)">
+        <select :value="selectedDroneId" :disabled="!drones.length" @change="selectDrone($event.target.value)">
           <option v-if="!drones.length" value="">{{ t('dronesituationpanel.no_drone') }}</option>
           <option v-for="drone in drones" :key="drone.droneId" :value="drone.droneId">
             {{ drone.name }} · {{ drone.droneId }}
@@ -249,7 +261,7 @@ onUnmounted(() => {
           :visible="open && mode === 'map'"
           :fleet-overview="mapScope === 'fleet'"
           map-type-id="roadmap"
-          @drone-select="emit('select-drone', $event)"
+          @drone-select="selectDrone"
         />
         <div class="situation-panel__map-scope" role="group" :aria-label="t('dronesituationpanel.map_scope')">
           <button type="button" :class="{ 'is-active': mapScope === 'fleet' }" @click="mapScope = 'fleet'">

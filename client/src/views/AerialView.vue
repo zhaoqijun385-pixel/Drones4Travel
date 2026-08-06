@@ -39,7 +39,7 @@ const { drone, gimbal } = useDrone();
 const fleet = useDroneFleet();
 const droneAgents = useDroneAgents();
 const fleetDemoRequested = isFleetDemoRequested();
-fleet.setDemoEnabled(fleetDemoRequested, { seedCount: fleetDemoRequested ? 20 : 0 });
+fleet.setDemoEnabled(fleetDemoRequested, { seedCount: fleetDemoRequested ? 4 : 0 });
 const fleetEnabled = computed(() => fleet.mode.value !== 'off');
 const fleetLiveEnabled = fleet.liveEnabled;
 const fleetDroneRows = computed(() => fleet.drones.value.map((item) => {
@@ -105,14 +105,27 @@ const openClawCommandNotice = ref('');
 const fleetActionNotice = ref('');
 const fleetCameraMode = ref(
   typeof window !== 'undefined'
-    ? window.localStorage.getItem('drone-navigation:fleet-camera-mode') || 'free'
-    : 'free',
+    ? window.localStorage.getItem('drone-navigation:fleet-camera-mode') || 'follow'
+    : 'follow',
 );
 const fleetCameraRange = ref(
   typeof window !== 'undefined'
     ? Number(window.localStorage.getItem('drone-navigation:fleet-camera-range') || 24)
     : 24,
 );
+// When a remote fleet aircraft is selected, its Cesium camera owns the POV.
+// Do not let the local aircraft's ground-level renderer cover that camera.
+const fleetPovDrone = computed(() => {
+  const selected = fleet.selectedDrone.value;
+  return fleetEnabled.value && selected && !selected.local ? selected : null;
+});
+
+function isRemoteGrounded(selected) {
+  if (!selected || selected.local) return false;
+  const z = Number(selected.z);
+  const alt = Number(selected.alt);
+  return !Number.isFinite(z) || z <= 1 || (Number.isFinite(alt) && alt < 1);
+}
 let fleetActionNoticeTimer = null;
 let fleetCameraTransitionUntil = 0;
 const {
@@ -134,16 +147,26 @@ const {
 
 function selectFleetDrone(droneId) {
   fleet.selectDrone(droneId);
-  if (['fpv', 'follow', 'top'].includes(fleetCameraMode.value)) {
-    const selected = fleet.drones.value.find((item) => item.droneId === droneId);
-    fleetCameraTransitionUntil = performance.now() + 700;
-    window.flyFleetCamera?.(selected, {
-      mode: fleetCameraMode.value,
+  const selected = fleet.drones.value.find((item) => item.droneId === droneId);
+  if (!selected) return;
+  switchIndex.value = isRemoteGrounded(selected) ? 0 : 1;
+  syncTakeoffSwitchItem();
+  const nextMode = ['fpv', 'follow', 'top'].includes(fleetCameraMode.value)
+    ? fleetCameraMode.value
+    : 'follow';
+  if (nextMode !== fleetCameraMode.value) {
+    setFleetCameraMode(nextMode);
+  } else {
+    // Apply the new target immediately. A fly-to animation can finish at the
+    // old target while the selected drone is already moving, which is why the
+    // minimap appeared to move but the main 3D view stayed behind.
+    fleetCameraTransitionUntil = 0;
+    window.updateFleetCamera?.(selected, {
+      mode: nextMode,
       range: fleetCameraRange.value,
       gimbalYaw: gimbal.yaw,
       gimbalPitch: gimbal.pitch,
       gimbalRoll: gimbal.roll,
-      duration: 0.65,
     });
   }
   if (openClawPanelOpen.value) {
@@ -152,6 +175,11 @@ function selectFleetDrone(droneId) {
       selectOpenClawAgent(record);
     }
   }
+}
+
+function handleFleetEntitySelect(event) {
+  const droneId = event?.detail?.droneId;
+  if (droneId) selectFleetDrone(droneId);
 }
 
 function selectSituationDrone(droneId) {
@@ -208,14 +236,13 @@ function setFleetCameraMode(mode) {
   }
   const selected = fleet.selectedDrone.value;
   if (selected) {
-    fleetCameraTransitionUntil = performance.now() + 760;
-    window.flyFleetCamera?.(selected, {
+    fleetCameraTransitionUntil = 0;
+    window.updateFleetCamera?.(selected, {
       mode,
       range: fleetCameraRange.value,
       gimbalYaw: gimbal.yaw,
       gimbalPitch: gimbal.pitch,
       gimbalRoll: gimbal.roll,
-      duration: 0.7,
     });
   }
 }
@@ -239,9 +266,12 @@ function setFleetCameraRange(range) {
   }
 }
 
+function setFleetDroneTakeoffAltitude(value) {
+  fleet.setDroneTakeoffAltitude(fleet.selectedDroneId.value, value);
+}
+
 function focusFleetDrone(droneId) {
-  fleet.selectDrone(droneId);
-  setFleetCameraMode('follow');
+  selectFleetDrone(droneId);
 }
 
 function flashFleetAction(message) {
@@ -678,29 +708,38 @@ const isPreCaching = computed(() => {
   const p = altitudeGate.flightPhase.value;
   return p === PHASES.PRE_TAKEOFF || p === PHASES.PRE_LANDING;
 });
-// Street View is only used on the 3D Aerial (Google tiles) subpage. On the
-// 3D Mesh (OSM Buildings) subpage the drone renders OSM buildings all the way
-// from airborne to ground, so no Street View switch-over happens. Loading
-// Google Street View there would also spin up a second WebGL context that
-// fights the Cesium context (the source of the uniform3fv warnings).
-const streetViewEnabled = computed(() => activeSource.value !== 'osm');
-const showStreetView = computed(() => streetViewEnabled.value && (drone.alt - altitudeGate.surfaceAlt.value) < ASCEND_THRESHOLD);
+// Street View is deliberately disabled for the entire fleet workbench. Every
+// fleet camera mode (FPV, follow, top and overview) stays in Cesium 3D. This
+// prevents a selected remote aircraft from being replaced by a local,
+// ground-level Google Street View request.
+const streetViewEnabled = computed(() => activeSource.value !== 'osm' && !fleetEnabled.value);
+const streetViewRelativeAlt = computed(() => {
+  if (fleetPovDrone.value) return Math.max(0, Number(fleetPovDrone.value.z) || 0);
+  return Math.max(0, drone.alt - altitudeGate.surfaceAlt.value);
+});
+const showStreetView = computed(() => (
+  streetViewEnabled.value
+  && streetViewRelativeAlt.value < ASCEND_THRESHOLD
+));
 const shouldPrewarmSV = computed(() => {
   if (!streetViewEnabled.value) return false;
   const phase = altitudeGate.flightPhase.value;
   if (phase === PHASES.PRE_LANDING || phase === PHASES.DESCENDING) return true;
-  return (drone.alt - altitudeGate.surfaceAlt.value) < 20;
+  return streetViewRelativeAlt.value < 20;
 });
 const isTransitioning = computed(() => {
-  const rel = drone.alt - altitudeGate.surfaceAlt.value;
+  const rel = streetViewRelativeAlt.value;
   return rel >= DESCEND_THRESHOLD && rel < ASCEND_THRESHOLD;
 });
 const streetViewOpacity = computed(() => {
   if (!streetViewEnabled.value) return 0;
-  const rel = drone.alt - altitudeGate.surfaceAlt.value;
+  const rel = streetViewRelativeAlt.value;
   if (rel <= DESCEND_THRESHOLD) return 1;
   if (rel >= ASCEND_THRESHOLD) return 0;
   return 1 - (rel - DESCEND_THRESHOLD) / (ASCEND_THRESHOLD - DESCEND_THRESHOLD);
+});
+watch(streetViewEnabled, (enabled) => {
+  if (!enabled) streetViewReady.value = false;
 });
 // Effective state bound to StreetViewPane: live flight values normally, the
 // replayed trajectory while the recorder replays it. Without this the replay
@@ -722,8 +761,8 @@ const svPaneState = computed(() => {
   }
   const pov = getStreetViewPov();
   return {
-    lat: drone.lat,
-    lon: drone.lon,
+    lat: fleetPovDrone.value?.lat ?? drone.lat,
+    lon: fleetPovDrone.value?.lon ?? drone.lon,
     headingRad: pov.headingRad,
     pitchRad: pov.pitchRad,
     relativeAlt: pov.relativeAlt,
@@ -789,10 +828,10 @@ async function swapSourceWithProgress(val) {
   assetLoading.value = true;
   assetLoadProgress.value = 0;
   loadStartTs = performance.now();
-  // Lazy manifest fallback: AWAIT it so even the very first switch (clicked
-  // before the mount-time warm-up has landed) still gets a cover clip.
-  if (!allSwitchClips.length) await loadSwitchClips();
-  switchVideoUrl.value = nextSwitchClip(); // '' only if the fetch failed
+  // Keep the transition cover neutral. The old splash-video cover showed a
+  // blue Earth while Cesium was still swapping tiles, which looked like a
+  // broken render rather than a loading state.
+  switchVideoUrl.value = '';
   // Serialize with any in-flight swap so rapid back-and-forth clicks queue
   // (last click wins) instead of being dropped by setSource's isSwitching
   // guard, which would leave the scene on the subpage the user clicked AWAY
@@ -830,7 +869,10 @@ const switchIndex = ref(0); // index of the action the button currently offers
 function syncTakeoffSwitchItem() {
   const item = rightItems.find((i) => i.id === 'takeoff');
   if (!item) return;
-  const action = SWITCH_SEQUENCE[switchIndex.value];
+  const selected = fleet.selectedDrone.value;
+  const remoteGrounded = isRemoteGrounded(selected)
+    && !Number.isFinite(Number(selected.autoTargetZ));
+  const action = remoteGrounded ? 'takeoff' : SWITCH_SEQUENCE[switchIndex.value];
   item.icon = action === 'takeoff' ? 'MENU_TAKEOFF'
     : action === 'landing' ? 'MENU_LANDING'
     : 'MENU_STOP';
@@ -839,7 +881,32 @@ function syncTakeoffSwitchItem() {
 
 function toggleTakeoffLanding() {
   const viewer = window.cesiumViewer;
-  const action = SWITCH_SEQUENCE[switchIndex.value];
+  const selectedFleetDrone = fleetEnabled.value ? fleet.selectedDrone.value : null;
+  const remoteGrounded = isRemoteGrounded(selectedFleetDrone)
+    && !Number.isFinite(Number(selectedFleetDrone.autoTargetZ));
+  const action = remoteGrounded ? 'takeoff' : SWITCH_SEQUENCE[switchIndex.value];
+  if (selectedFleetDrone && !selectedFleetDrone.local && fleet.mode.value === 'demo') {
+    const demoAction = action === 'landing' ? 'land' : action;
+    const applied = fleet.applyDemoCommand(selectedFleetDrone.droneId, demoAction);
+    if (applied) {
+      if (['free', 'overview'].includes(fleetCameraMode.value)) {
+        setFleetCameraMode('follow');
+      } else {
+        fleetCameraTransitionUntil = 0;
+        window.updateFleetCamera?.(selectedFleetDrone, {
+          mode: fleetCameraMode.value,
+          range: fleetCameraRange.value,
+          gimbalYaw: gimbal.yaw,
+          gimbalPitch: gimbal.pitch,
+          gimbalRoll: gimbal.roll,
+        });
+      }
+      flashFleetAction(`${selectedFleetDrone.name} · ${t(`aerialview.${action}`)}`);
+      switchIndex.value = (switchIndex.value + 1) % SWITCH_SEQUENCE.length;
+      syncTakeoffSwitchItem();
+    }
+    return;
+  }
   if (action === 'takeoff') {
     // startTakeoff returns false when the drone is already above the takeoff
     // altitude (settings.takeoffAltitude, default 100 m): no sequence starts,
@@ -1040,9 +1107,11 @@ function syncCesiumCamera(now = performance.now()) {
 }
 
 function getStreetViewPov() {
-  const headingRad = ((drone.heading + gimbal.yaw) * Math.PI) / 180;
+  const povDrone = fleetPovDrone.value;
+  const heading = Number(povDrone?.yaw ?? povDrone?.heading ?? drone.heading);
+  const headingRad = ((heading + gimbal.yaw) * Math.PI) / 180;
   const pitchRad = (gimbal.pitch * Math.PI) / 180;
-  const relativeAlt = Math.max(0, drone.alt - altitudeGate.surfaceAlt.value);
+  const relativeAlt = streetViewRelativeAlt.value;
   return { headingRad, pitchRad, relativeAlt };
 }
 
@@ -1088,9 +1157,44 @@ function updateFleetLayer(now) {
   }
 }
 
+function updateSelectedDemoDrone(dt, selected) {
+  if (!selected || selected.local) return;
+
+  if (showFlight.value) {
+    let enuMove = null;
+    let yawDelta = 0;
+    if (activeFlightMode.value === 'M' && (Math.abs(flightCmd.vx) > 0 || Math.abs(flightCmd.vy) > 0)) {
+      enuMove = computeDesiredEnuMove(dt, true);
+    } else if (activeFlightMode.value === 'H' && Math.abs(flightCmd.vz) > 0) {
+      enuMove = computeDesiredEnuMove(dt, true);
+    } else if (activeFlightMode.value === 'R' && Math.abs(flightCmd.yaw) > 0) {
+      yawDelta = flightCmd.yaw * 60.0 * dt;
+    }
+    if (enuMove || yawDelta) {
+      fleet.applyDemoMove(selected.droneId, enuMove || { x: 0, y: 0, z: 0 }, { yawDelta });
+    }
+  }
+
+  if (showCamera.value) {
+    stepCameraPhysics(dt, { applyMovement: true });
+  }
+}
+
 function updateDroneState() {
   const dt = 1 / 60;
   const viewer = window.cesiumViewer;
+
+  // A selected demo aircraft is controlled by the shared flight disk and
+  // keyboard, but it must not pass through the local altitude gate. That gate
+  // samples only the local drone's ground and was the source of the remote
+  // aircraft snapping back down and jittering there.
+  const selectedFleetDrone = fleetEnabled.value && fleet.mode.value === 'demo'
+    ? fleet.selectedDrone.value
+    : null;
+  if (selectedFleetDrone && !selectedFleetDrone.local) {
+    updateSelectedDemoDrone(dt, selectedFleetDrone);
+    return;
+  }
 
   altitudeGate.update(viewer);
 
@@ -1194,6 +1298,7 @@ onMounted(() => {
   cesiumContainer.value = document.getElementById('cesiumContainer');
   startFlightKeyboard();
   startCameraKeyboard();
+  window.addEventListener('fleetDroneSelect', handleFleetEntitySelect);
   syncCesiumCamera();
   droneAgents.refresh()
     .then((records) => {
@@ -1319,6 +1424,17 @@ onMounted(() => {
     if (item) item.active = val;
   });
   watch(fleetEnabled, syncFleetToggleItem);
+  watch(fleet.selectedDroneId, () => {
+    const selected = fleet.selectedDrone.value;
+    // Phase labels can be stale after a profile reload. The actual control
+    // state is the aircraft's height/auto target, so a remote parked at the
+    // ground must always expose Takeoff rather than getting stuck on Stop.
+    const airborneOrAuto = selected
+      && !selected.local
+      && (Number(selected.z) > 0.2 || Number.isFinite(Number(selected.autoTargetZ)));
+    switchIndex.value = airborneOrAuto ? 1 : 0;
+    syncTakeoffSwitchItem();
+  });
   watch(openClawPanelOpen, (val) => {
     const item = leftItems.find((entry) => entry.id === 'openclaw-float');
     if (item) item.active = val;
@@ -1401,6 +1517,7 @@ onUnmounted(() => {
   }
   stopFlightKeyboard();
   stopCameraKeyboard();
+  window.removeEventListener('fleetDroneSelect', handleFleetEntitySelect);
   if (rafId) cancelAnimationFrame(rafId);
   if (connectionCheckInterval) clearInterval(connectionCheckInterval);
   clear();
@@ -1435,6 +1552,7 @@ onUnmounted(() => {
   >
     <template #background>
       <StreetViewPane
+        v-if="streetViewEnabled"
         class="view-composer__background"
         :lat="svPaneState.lat"
         :lon="svPaneState.lon"
@@ -1480,7 +1598,7 @@ onUnmounted(() => {
         @confirm-command="confirmDroneCommand"
         @cancel-command="cancelDroneCommand"
       />
-      <FleetTray
+  <FleetTray
         :minimized="fleetTrayMinimized"
         :drones="fleetDroneRows"
         :selected-drone-id="fleet.selectedDroneId.value"
@@ -1506,6 +1624,7 @@ onUnmounted(() => {
         @focus-drone="focusFleetDrone"
         @camera-mode-change="setFleetCameraMode"
         @camera-range-change="setFleetCameraRange"
+        @set-takeoff-altitude="setFleetDroneTakeoffAltitude"
         @navigate-to="navigateFleetDrone"
         @gather="gatherFleet"
       />
@@ -1556,6 +1675,7 @@ onUnmounted(() => {
           />
         </div>
       </Transition>
+      <div v-if="assetLoading" class="asset-loading-cover" aria-hidden="true" />
       <div
         v-if="captureAuthNotice"
         class="top-center-message top-center-message--auth"
@@ -1929,6 +2049,16 @@ onUnmounted(() => {
   z-index: 4;
   background: #000000;
   pointer-events: none;
+}
+
+/* Keep the scene hidden while Cesium swaps tiles, without showing a splash
+   clip that can be mistaken for a broken blue render. */
+.asset-loading-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  background: rgba(3, 11, 18, 0.86);
+  pointer-events: auto;
 }
 
 .switch-video-cover__video {

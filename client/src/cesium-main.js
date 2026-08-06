@@ -108,27 +108,31 @@ function createFleetEntity(state) {
         position: Cesium.Cartesian3.fromDegrees(state.lon, state.lat, state.alt),
         orientation: Cesium.Transforms.headingPitchRollQuaternion(
             Cesium.Cartesian3.fromDegrees(state.lon, state.lat, state.alt),
-            new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(Number(state.heading ?? state.yaw ?? 0)), 0, 0),
+            new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(Number(state.yaw ?? state.heading ?? 0)), 0, 0),
         ),
         model: {
             uri: '/models/fleet-drone.gltf',
-            scale: 0.72,
-            minimumPixelSize: 22,
-            maximumScale: 2.8,
+            scale: 1,
+            minimumPixelSize: 40,
+            maximumScale: 6,
             color,
             colorBlendMode: Cesium.ColorBlendMode.MIX,
-            colorBlendAmount: 0.28,
+            // Keep each model's graphite/ceramic/orange materials visible;
+            // the fleet color only tints the airframe as an identity cue.
+            colorBlendAmount: 0.08,
             silhouetteColor: Cesium.Color.WHITE,
             silhouetteSize: 0,
-            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 360),
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2500),
         },
         point: {
-            pixelSize: state.local ? 12 : 9,
+            pixelSize: state.local ? 11 : 9,
             color,
             outlineColor: Cesium.Color.WHITE.withAlpha(0.88),
             outlineWidth: state.local ? 3 : 1,
-            disableDepthTestDistance: 500,
-            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(320, 500),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            // Point markers are only a far-distance fallback. At normal
+            // flight-deck ranges the modeled airframe is always used.
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(2500, 12000),
         },
         label: {
             text: state.name || state.droneId,
@@ -213,12 +217,12 @@ window.updateDroneFleet = function updateDroneFleet(states = [], options = {}) {
         entity.position.setValue(position);
         entity.orientation = Cesium.Transforms.headingPitchRollQuaternion(
             position,
-            new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(Number(state.heading ?? state.yaw ?? 0)), 0, 0),
+            new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(Number(state.yaw ?? state.heading ?? 0)), 0, 0),
         );
         const firstPerson = state.droneId === options.firstPersonDroneId;
         entity.show = inRange && !firstPerson;
         entity.model.show = inRange && !firstPerson;
-        entity.point.show = inRange;
+        entity.point.show = inRange && distance > 2500;
         entity.label.show = inRange && distance <= labelDistance;
         if (state.name !== entity._fleetLastName) {
             entity.label.text = state.name || state.droneId;
@@ -266,6 +270,17 @@ window.clearDroneFleet = function clearDroneFleet() {
 window.getDroneFleetStats = function getDroneFleetStats() {
     return { ...fleetStats };
 };
+
+// Picking a modeled airframe is equivalent to selecting it in the fleet tray.
+// The Vue layer owns the selected state and camera transition.
+viewer.screenSpaceEventHandler.setInputAction((movement) => {
+    const picked = viewer.scene.pick(movement.position);
+    const id = picked?.id?.id || picked?.id;
+    if (typeof id !== 'string' || !id.startsWith('fleet:')) return;
+    window.dispatchEvent(new CustomEvent('fleetDroneSelect', {
+        detail: { droneId: id.slice('fleet:'.length) },
+    }));
+}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
 // Explicitly hide the underlying base globe surface to expose clean Google Meshes.
 // If the photorealistic tileset fails to load, we re-enable the globe as a fallback.
@@ -435,6 +450,7 @@ async function loadArena() {
         // Add OSM Buildings as a fallback 3D dataset.
         try {
             const osmBuildings = await Cesium.createOsmBuildingsAsync();
+            applyNeutralSphericalHarmonics(osmBuildings);
             viewer.scene.primitives.add(osmBuildings);
             console.log('[Cesium] OSM Buildings loaded.');
         } catch (osmError) {
@@ -494,7 +510,7 @@ window.updateCesiumCamera = function(state) {
 function fleetCameraOffset(state, mode = 'follow', range = 24) {
     const heading = mode === 'top'
         ? Cesium.Math.toRadians(Number(state.gimbalYaw || 0))
-        : Cesium.Math.toRadians(((Number(state.heading ?? state.yaw ?? 0) + 180 + Number(state.gimbalYaw || 0)) % 360 + 360) % 360);
+        : Cesium.Math.toRadians(((Number(state.yaw ?? state.heading ?? 0) + 180 + Number(state.gimbalYaw || 0)) % 360 + 360) % 360);
     const pitch = mode === 'top'
         ? Cesium.Math.toRadians(-89)
         : Cesium.Math.toRadians(Math.max(-80, Math.min(-8, -24 + Number(state.gimbalPitch || 0))));
@@ -504,6 +520,10 @@ function fleetCameraOffset(state, mode = 'follow', range = 24) {
 window.updateFleetCamera = function updateFleetCamera(state, options = {}) {
     if (!viewer || !state || options.mode === 'free') return;
     if (options.mode === 'fpv') {
+        // Follow/top modes use a target-relative camera transform. FPV needs
+        // world coordinates; keeping the old transform makes setView offset
+        // from the wrong origin after a view switch.
+        viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
         const destination = Cesium.Cartesian3.fromDegrees(
             Number(state.lon),
             Number(state.lat),
@@ -512,8 +532,8 @@ window.updateFleetCamera = function updateFleetCamera(state, options = {}) {
         viewer.camera.setView({
             destination,
             orientation: {
-                heading: Cesium.Math.toRadians(((Number(state.heading || state.yaw || 0) + Number(options.gimbalYaw || 0)) % 360 + 360) % 360),
-                pitch: Cesium.Math.toRadians(Number(options.gimbalPitch || 0)),
+                heading: Cesium.Math.toRadians(((Number(state.yaw ?? state.heading ?? 0) + Number(options.gimbalYaw || 0)) % 360 + 360) % 360),
+                pitch: Cesium.Math.toRadians(Math.max(-89, Math.min(45, Number(options.gimbalPitch || 0)))),
                 roll: Cesium.Math.toRadians(Number(options.gimbalRoll || 0)),
             },
         });
@@ -529,6 +549,10 @@ window.updateFleetCamera = function updateFleetCamera(state, options = {}) {
         Number(state.lat),
         Math.max(0, Number(state.alt) || 0),
     );
+    // A previous flyTo can otherwise keep writing the old camera transform
+    // after a drone selection. Cancel it before applying the live target.
+    viewer.camera.cancelFlight();
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
     viewer.camera.lookAt(target, fleetCameraOffset(cameraState, options.mode, options.range));
 };
 
@@ -543,8 +567,8 @@ window.flyFleetCamera = function flyFleetCamera(state, options = {}) {
                 Math.max(0, Number(state.alt) || 0) + 0.28,
             ),
             orientation: {
-                heading: Cesium.Math.toRadians(((Number(state.heading || state.yaw || 0) + Number(options.gimbalYaw || 0)) % 360 + 360) % 360),
-                pitch: Cesium.Math.toRadians(Number(options.gimbalPitch || 0)),
+        heading: Cesium.Math.toRadians(((Number(state.yaw ?? state.heading ?? 0) + Number(options.gimbalYaw || 0)) % 360 + 360) % 360),
+                pitch: Cesium.Math.toRadians(Math.max(-89, Math.min(45, Number(options.gimbalPitch || 0)))),
                 roll: Cesium.Math.toRadians(Number(options.gimbalRoll || 0)),
             },
             duration: Number(options.duration ?? 0.55),

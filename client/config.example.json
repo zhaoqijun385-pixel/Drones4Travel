@@ -1,0 +1,10 @@
+{
+  "googleApiKey": "",
+  "cesiumIonToken": "",
+  "openclaw": {
+    "url": "ws://127.0.0.1:18789",
+    "token": ""
+  },
+  "_note": "Copy this file to config.json and fill in the local credentials. config.json is gitignored.",
+  "_note_openclaw": "The OpenClaw token must match the local gateway configuration."
+}

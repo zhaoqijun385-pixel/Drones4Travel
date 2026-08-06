@@ -5,6 +5,7 @@ import { useCameraPhysics } from '../composables/useCameraPhysics.js';
 import { useDrone } from '../composables/useDrone.js';
 import { useFlightCommands } from '../composables/useFlightCommands.js';
 import { useFlightPhysics } from '../composables/useFlightPhysics.js';
+import { altitudeSpeedFromInput } from '../composables/flightAltitudeMath.js';
 
 test('pan/tilt gimbal updates yaw and pitch in the same frame', () => {
   const { gimbal } = useDrone();
@@ -28,4 +29,15 @@ test('height control uses a bounded three-metre-per-second rate', () => {
   const movement = physics.computeDesiredEnuMove(1, true);
   assert.equal(movement.z, 3);
   commands.onFlightStop();
+});
+
+test('height control speed follows joystick displacement with a deadzone', () => {
+  assert.equal(altitudeSpeedFromInput(0), 0);
+  assert.equal(altitudeSpeedFromInput(0.05), 0);
+  assert.ok(altitudeSpeedFromInput(0.25) > 0);
+  assert.ok(altitudeSpeedFromInput(0.25) < altitudeSpeedFromInput(0.75));
+  assert.equal(altitudeSpeedFromInput(1), 3);
+  assert.equal(altitudeSpeedFromInput(3), 3);
+  assert.equal(altitudeSpeedFromInput(-1), -8);
+  assert.ok(Math.abs(altitudeSpeedFromInput(-0.75)) > Math.abs(altitudeSpeedFromInput(0.75)));
 });

@@ -48,6 +48,7 @@
   "camera_top": "俯视",
   "camera_overview": "全览",
   "camera_distance": "视角距离",
+  "takeoff_altitude": "当前机起飞高度",
   "search": "搜索名称或编号",
   "locate": "定位并跟随这架无人机",
   "me": "我的位置",

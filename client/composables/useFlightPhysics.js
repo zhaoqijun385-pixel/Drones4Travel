@@ -1,8 +1,12 @@
 import { useDrone } from './useDrone.js';
 import { useFlightCommands } from './useFlightCommands.js';
+import {
+  altitudeSpeedFromInput,
+  ALTITUDE_MAX_SPEED_MPS,
+  ALTITUDE_DESCENT_MAX_SPEED_MPS,
+} from './flightAltitudeMath.js';
 
 const MOVEMENT_SPEED = 0.0002; // degrees per frame at full deflection
-const ALTITUDE_SPEED = 3.0; // meters per second at full deflection
 const ROTATION_SPEED = 60.0; // degrees per second at full deflection
 const ZOOM_RATE = 2.5; // zoom levels per second at full deflection (exponential H-mode)
 
@@ -31,11 +35,13 @@ export function useFlightPhysics() {
         // Match Google Maps native wheel: zoom level changes linearly with input,
         // so altitude (20971520 / 2^zoom) changes exponentially with time.
         // Up/positive vz means climb -> altitude increases -> zoom out.
-        const dz = flightCmd.vz * ZOOM_RATE * dt;
+        const speedLimit = flightCmd.vz < 0 ? ALTITUDE_DESCENT_MAX_SPEED_MPS : ALTITUDE_MAX_SPEED_MPS;
+        const speedRatio = altitudeSpeedFromInput(flightCmd.vz) / speedLimit;
+        const dz = speedRatio * ZOOM_RATE * dt;
         const newAlt = drone.alt * Math.pow(2, dz);
         return { x: 0, y: 0, z: newAlt - drone.alt };
       }
-      return { x: 0, y: 0, z: flightCmd.vz * ALTITUDE_SPEED * dt };
+      return { x: 0, y: 0, z: altitudeSpeedFromInput(flightCmd.vz) * dt };
     }
 
     return null;
@@ -67,10 +73,12 @@ export function useFlightPhysics() {
       flight.vx = 0;
       flight.vy = 0;
       flight.yaw = 0;
-      flight.vz = flightCmd.vz;
+      flight.vz = altitudeSpeedFromInput(flightCmd.vz);
       if (options.exponentialAltitude) {
         // Report the instantaneous vertical speed in m/s for telemetry.
-        flight.vz = flightCmd.vz * ZOOM_RATE * Math.LN2 * drone.alt;
+        const speedLimit = flightCmd.vz < 0 ? ALTITUDE_DESCENT_MAX_SPEED_MPS : ALTITUDE_MAX_SPEED_MPS;
+        flight.vz = (altitudeSpeedFromInput(flightCmd.vz) / speedLimit)
+          * ZOOM_RATE * Math.LN2 * drone.alt;
       }
     }
   }
