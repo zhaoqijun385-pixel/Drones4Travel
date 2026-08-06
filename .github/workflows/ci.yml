@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main, twin]
+  pull_request:
+    branches: [main, twin]
+
+jobs:
+  frontend:
+    name: "Frontend: test + build"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - run: npm ci
+      - run: npm run test:fleet
+      - run: npm run build
+
+  backend:
+    name: "Backend: Python tests"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Run tests (SQLite backend)
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///test.db"
+          SECRET: "ci-test-secret-not-for-production"
+        run: python -m unittest discover tests -v
