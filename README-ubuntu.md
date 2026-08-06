@@ -45,7 +45,7 @@ bash Miniconda3-latest-Linux-x86_64.sh -b -p ~/miniconda3
 curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
 sudo apt install -y nodejs
 
-git clone https://github.com/kandeng/drone-navigation.git ~/drone-navigation
+git clone https://github.com/QuentinCrane/Drones4Travel.git ~/drone-navigation
 ```
 
 Checkpoint: `node -v`, `npm -v`, `conda --version`, `git --version` all print versions.
@@ -219,7 +219,7 @@ Start the whole bridge with one script (it self-activates the `drone-navigation`
 
 ```bash
 cd ~/drone-navigation/extension/crazyflie_bridge
-CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" \
+CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/87/2M/E7E787A91D" \
 TELEMETRY_SERVER="ws://127.0.0.1:8000/api/drone/telemetry/publish" \
 MEDIAMTX_URL="http://127.0.0.1:8889" MEDIAMTX_API="http://127.0.0.1:9997" \
   ./start_bridge.sh

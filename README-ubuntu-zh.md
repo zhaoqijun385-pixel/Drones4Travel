@@ -45,7 +45,7 @@ bash Miniconda3-latest-Linux-x86_64.sh -b -p ~/miniconda3
 curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
 sudo apt install -y nodejs
 
-git clone https://github.com/kandeng/drone-navigation.git ~/drone-navigation
+git clone https://github.com/QuentinCrane/Drones4Travel.git ~/drone-navigation
 ```
 
 检查点：`node -v`、`npm -v`、`conda --version`、`git --version` 都能打印版本号。
@@ -219,7 +219,7 @@ python provision_drone.py --channel 14 --address E7E7E7E707
 
 ```bash
 cd ~/drone-navigation/extension/crazyflie_bridge
-CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" \
+CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/87/2M/E7E787A91D" \
 TELEMETRY_SERVER="ws://127.0.0.1:8000/api/drone/telemetry/publish" \
 MEDIAMTX_URL="http://127.0.0.1:8889" MEDIAMTX_API="http://127.0.0.1:9997" \
   ./start_bridge.sh

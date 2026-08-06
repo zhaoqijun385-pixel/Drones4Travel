@@ -1,5 +1,7 @@
 # Drone Navigation
 
+[![CI](https://github.com/QuentinCrane/Drones4Travel/actions/workflows/ci.yml/badge.svg)](https://github.com/QuentinCrane/Drones4Travel/actions/workflows/ci.yml)
+
 A multi-view drone navigation dashboard combining 3D aerial visualization, 2D mapping, and mission-control interfaces.
 
 This guide runs the **entire system locally on Windows 10/11 with WSL2** — no server accounts needed. Other platforms and languages:
@@ -64,7 +66,7 @@ sudo apt install -y nodejs
 
 # Clone into the WSL HOME — never under /mnt/c
 # (npm install on the Windows filesystem is 10-50x slower)
-git clone https://github.com/kandeng/drone-navigation.git ~/drone-navigation
+git clone https://github.com/QuentinCrane/Drones4Travel.git ~/drone-navigation
 ```
 
 Checkpoint: `node -v`, `npm -v`, `conda --version`, `git --version` all print versions.
@@ -256,7 +258,7 @@ Start the whole bridge with one script (it self-activates the `drone-navigation`
 
 ```bash
 cd ~/drone-navigation/extension/crazyflie_bridge
-CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" \
+CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/87/2M/E7E787A91D" \
 TELEMETRY_SERVER="ws://127.0.0.1:8000/api/drone/telemetry/publish" \
 MEDIAMTX_URL="http://127.0.0.1:8889" MEDIAMTX_API="http://127.0.0.1:9997" \
   ./start_bridge.sh

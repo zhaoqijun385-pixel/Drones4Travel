@@ -1,5 +1,7 @@
 # 无人机导航（Drone Navigation）
 
+[![CI](https://github.com/QuentinCrane/Drones4Travel/actions/workflows/ci.yml/badge.svg)](https://github.com/QuentinCrane/Drones4Travel/actions/workflows/ci.yml)
+
 多视角无人机导航仪表盘，融合 3D 空中可视化、2D 地图与任务控制界面。
 
 本指南在 **Windows 10/11 + WSL2 上完整本地运行整个系统** —— 无需任何服务器账号。其他平台与语言：
@@ -64,7 +66,7 @@ sudo apt install -y nodejs
 
 # 克隆到 WSL 的 HOME —— 绝不要放在 /mnt/c 下
 # （在 Windows 文件系统上 npm install 慢 10-50 倍）
-git clone https://github.com/kandeng/drone-navigation.git ~/drone-navigation
+git clone https://github.com/QuentinCrane/Drones4Travel.git ~/drone-navigation
 ```
 
 检查点：`node -v`、`npm -v`、`conda --version`、`git --version` 都能打印版本号。
@@ -256,7 +258,7 @@ python provision_drone.py --channel 14 --address E7E7E7E707
 
 ```bash
 cd ~/drone-navigation/extension/crazyflie_bridge
-CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" \
+CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/87/2M/E7E787A91D" \
 TELEMETRY_SERVER="ws://127.0.0.1:8000/api/drone/telemetry/publish" \
 MEDIAMTX_URL="http://127.0.0.1:8889" MEDIAMTX_API="http://127.0.0.1:9997" \
   ./start_bridge.sh
