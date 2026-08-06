@@ -24,6 +24,9 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
+      - name: Prepare config (gitignored in repo)
+        run: cp config.example.json config.json
+
       - run: npm ci
       - run: npm run test:fleet
       - run: npm run build
@@ -46,6 +49,9 @@ jobs:
           cache-dependency-path: server/requirements.txt
 
       - run: pip install -r requirements.txt
+
+      - name: Prepare config (gitignored in repo)
+        run: cp config.example.json config.json
 
       - name: Run tests (SQLite backend)
         env:
