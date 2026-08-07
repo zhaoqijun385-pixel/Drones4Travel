@@ -20,6 +20,7 @@ from sqlalchemy import text
 from .config import CONFIG
 from .db import Base, engine
 from .drone_commands import router as drone_commands_router
+from .drone_identity import router as drone_identity_router
 from .fleet import HUB as fleet_hub
 from .fleet import router as fleet_router
 from .matrix_auth import router as matrix_router
@@ -27,6 +28,8 @@ from .openclaw_chat import router as openclaw_chat_router
 from .openclaw_agents import router as openclaw_agents_router
 from .schemas import UserCreate, UserRead, UserUpdate
 from .settings import router as settings_router
+from .sim_arena import router as sim_arena_router
+from .survey_mission import router as survey_mission_router
 from .stream import router as stream_router
 from .telemetry import router as telemetry_router
 from .users import auth_backend, fastapi_users, google_oauth_client
@@ -114,10 +117,19 @@ app.include_router(telemetry_router, prefix="/api")
 # --- Real drone: flight commands (WS /api/drone/command[/downlink]) ----------
 app.include_router(drone_commands_router, prefix="/api")
 
+# --- Real drone: physical radio identity (GET /api/drone/identity) ------------
+app.include_router(drone_identity_router, prefix="/api")
+
 # --- Multi-drone collaboration rooms + lease-guarded command routing --------
 app.include_router(fleet_router, prefix="/api")
 app.include_router(openclaw_chat_router, prefix="/api")
 app.include_router(openclaw_agents_router, prefix="/api")
+
+# --- Mission Arena: 2D escort/infiltrate sim (sidelane; no radio) ------------
+app.include_router(sim_arena_router, prefix="/api")
+
+# --- Tourism survey Task1/Task2 (sidelane; dry-run default) ---
+app.include_router(survey_mission_router, prefix="/api")
 
 
 @app.get("/api/health")

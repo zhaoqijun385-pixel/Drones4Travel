@@ -19,6 +19,16 @@ const props = defineProps({
   sharedTarget: { type: Object, default: null },
   visible: { type: Boolean, default: true },
   fleetOverview: { type: Boolean, default: false },
+  /** When false, hide the centered CSS drone icon (Mission Arena draws its own). Default true keeps Node-8 Map2D unchanged. */
+  showDroneMarker: { type: Boolean, default: true },
+  /** When true, freeze pan/zoom/gestures for a fixed tactical frame. Default false keeps Map2D interactive. */
+  locked: { type: Boolean, default: false },
+  /** Mission Arena: allow rotate/tilt controls (satellite 45°) without affecting Map2D defaults. */
+  cameraGestures: { type: Boolean, default: false },
+  /** Optional map heading (deg). Used by Mission Arena observer FPV; Map2D leaves unset. */
+  mapHeading: { type: Number, default: null },
+  /** Optional map tilt (deg 0–67.5). Mission Arena observer look-down. */
+  mapTilt: { type: Number, default: null },
 });
 
 const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'droneSelect', 'poisFound', 'poisError', 'routeFound', 'routeError']);
@@ -208,6 +218,8 @@ function updateMapCenter(lat, lng) {
   if (isSameCenter({ lat: current.lat(), lng: current.lng() }, target)) return;
   lastProgrammaticCenter = target;
   map.value.setCenter(target);
+  // fitBounds/setCenter can drop heading on some builds — reassert Arena pose.
+  reassertCameraPose();
 }
 
 // ── Anchor-preserving zoom (reverse-engineered from Google Maps internals) ──
@@ -274,6 +286,7 @@ function updateMapZoom(alt) {
   const rect = map.value.getDiv()?.getBoundingClientRect();
   if (!rect) return;
   anchoredZoom(altToZoom(alt) - map.value.getZoom(), rect.width / 2, rect.height / 2, true);
+  reassertCameraPose();
 }
 
 function handleCenterChanged() {
@@ -314,6 +327,15 @@ onMounted(async () => {
   try {
     mapsApi = await loadGoogleMaps();
 
+    // Programmatic tilt/heading (Mission Arena) must work even when locked
+    // disables mouse pan. Without initial tilt>0, setHeading is nearly invisible.
+    const initTilt = props.cameraGestures && props.mapTilt != null && Number.isFinite(props.mapTilt)
+      ? Math.max(0, Math.min(67.5, props.mapTilt))
+      : ((!props.locked && props.cameraGestures && props.mapTypeId === 'satellite') ? 45 : 0);
+    const initHeading = props.cameraGestures && props.mapHeading != null && Number.isFinite(props.mapHeading)
+      ? props.mapHeading
+      : 0;
+
     map.value = new mapsApi.Map(containerRef.value, {
       center: { lat: props.lat, lng: props.lon },
       zoom: altToZoom(props.alt),
@@ -321,15 +343,17 @@ onMounted(async () => {
       disableDefaultUI: true,
       clickableIcons: false,  // POI icons should not intercept map picks
       scrollwheel: false,     // we handle wheel events ourselves
-      gestureHandling: 'auto',
-      draggable: true,
+      gestureHandling: props.locked ? 'none' : 'greedy',
+      draggable: !props.locked,
       keyboardShortcuts: false,
-      zoomControl: false,
+      zoomControl: !props.locked && props.cameraGestures,
       mapTypeControl: false,
       streetViewControl: false,
       fullscreenControl: false,
-      scaleControl: false,
-      rotateControl: false,
+      scaleControl: props.cameraGestures,
+      rotateControl: !props.locked && props.cameraGestures,
+      tilt: initTilt,
+      heading: initHeading,
     });
 
     listeners.push(mapsApi.event.addListener(map.value, 'center_changed', handleCenterChanged));
@@ -338,10 +362,16 @@ onMounted(async () => {
     syncFleetMarkers();
     fitFleetBounds(true);
 
+    // Apply again after tiles settle — watch() may have missed the pre-mount props.
+    applyCameraPose(props.mapHeading, props.mapTilt);
+
     // Capture-phase wheel listener: fires before any Google Maps listener.
     // passive: false avoids Chrome's passive-listener console warning.
-    wheelHandler = onWheel;
-    containerRef.value.addEventListener('wheel', wheelHandler, { capture: true, passive: false });
+    // Locked maps (Mission Arena) skip wheel zoom so the tactical frame stays fixed.
+    if (!props.locked) {
+      wheelHandler = onWheel;
+      containerRef.value.addEventListener('wheel', wheelHandler, { capture: true, passive: false });
+    }
   } catch (e) {
     console.error('[2D Map]', e);
     error.value = e?.message || String(e);
@@ -376,10 +406,55 @@ watch(() => props.alt, (alt) => {
   updateMapZoom(alt);
 });
 
-// React to map-type changes (e.g. switching between the 2D Address and
-// 2D Satellite subpages) after the map has been created.
+watch(() => props.locked, (locked) => {
+  if (!map.value) return;
+  map.value.setOptions({
+    gestureHandling: locked ? 'none' : (props.cameraGestures ? 'greedy' : 'auto'),
+    draggable: !locked,
+    rotateControl: !locked && props.cameraGestures,
+    zoomControl: !locked && props.cameraGestures,
+  });
+  if (locked) {
+    if (wheelHandler && containerRef.value) {
+      containerRef.value.removeEventListener('wheel', wheelHandler, { capture: true });
+      wheelHandler = null;
+    }
+  } else if (!wheelHandler && containerRef.value) {
+    wheelHandler = onWheel;
+    containerRef.value.addEventListener('wheel', wheelHandler, { capture: true, passive: false });
+  }
+});
+
+function applyCameraPose(heading, tilt) {
+  if (!map.value || !props.cameraGestures) return;
+  try {
+    // Raster Maps JS: tilt is ONLY 0 or 45 (continuous values are ignored).
+    // Vector maps accept a range; snap is still fine for Arena FPV.
+    const wantTilt = tilt != null && Number.isFinite(tilt) ? Number(tilt) : 45;
+    const rasterTilt = wantTilt >= 20 ? 45 : 0;
+    map.value.setTilt(rasterTilt);
+    if (heading != null && Number.isFinite(heading)) {
+      map.value.setHeading(((Number(heading) % 360) + 360) % 360);
+    }
+  } catch { /* imagery may not support tilt/heading everywhere */ }
+}
+
+function reassertCameraPose() {
+  if (!props.cameraGestures) return;
+  applyCameraPose(props.mapHeading, props.mapTilt);
+}
+
+watch(() => [props.mapHeading, props.mapTilt], ([heading, tilt]) => {
+  applyCameraPose(heading, tilt);
+});
+
+// Satellite ↔ roadmap: re-assert tilt/heading (roadmap ignores tilt; satellite needs it).
 watch(() => props.mapTypeId, (mapTypeId) => {
-  if (map.value) map.value.setMapTypeId(mapTypeId);
+  if (!map.value) return;
+  map.value.setMapTypeId(mapTypeId);
+  if (mapTypeId === 'satellite' || mapTypeId === 'hybrid') {
+    applyCameraPose(props.mapHeading, props.mapTilt ?? 45);
+  }
 });
 
 watch(() => props.visible, async (visible) => {
@@ -617,6 +692,9 @@ function attachMapClickListener() {
 defineExpose({
   searchNearbyPoisAt,
   searchRoutes,
+  /** Google Maps Map instance (null until loaded). Used by Mission Arena overlays only. */
+  getMap: () => map.value,
+  getMapsApi: () => mapsApi,
 });
 
 watch(() => [props.isPicking, props.isPanelOpen], () => {
@@ -630,7 +708,7 @@ watch(() => [props.isPicking, props.isPanelOpen], () => {
   <div class="map-view">
     <div ref="containerRef" class="map-container"></div>
     <img
-      v-if="!fleetDrones.length"
+      v-if="showDroneMarker && !fleetDrones.length"
       class="drone-marker"
       :src="droneIconUrl"
       alt="Drone"

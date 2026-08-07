@@ -14,7 +14,7 @@ from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 # URI of the Crazyflie to connect to (radio link via the Crazyradio PA):
 #   radio://<dongle>/<channel>/<datarate>/<address>
 # Adjust if the drone was provisioned to a different channel/address.
-URI = 'radio://0/80/2M/E7E7E7E7E7'
+URI = 'radio://0/87/2M/E7E787A91D'
 
 # Only output errors from the logging framework
 logging.basicConfig(level=logging.ERROR)

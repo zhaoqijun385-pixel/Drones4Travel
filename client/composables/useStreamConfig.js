@@ -21,8 +21,8 @@ const WHEP_BASE = import.meta.env.DEV
 const FALLBACK_STREAMS = [
   {
     id: 'crazyflie-drone',
-    hostname: 'crazyflie-drone',
-    description: 'Live video from the Crazyflie drone (ESP32 AI-Deck)',
+    hostname: 'project-cf',
+    description: 'Project Crazyflie · radio://0/87/2M/E7E787A91D (ch87 / 2M / E7E787A91D) · AI-Deck livestream',
     whep_url: `${WHEP_BASE}/crazyflie-drone/whep`,
   },
   {
@@ -101,6 +101,9 @@ function normalize(list) {
       hostname: s.hostname || s.id || '',
       description: s.description || '',
       whep_url: s.whep_url || '',
+      radio_uri: s.radio_uri || '',
+      radio_channel: s.radio_channel,
+      radio_address: s.radio_address,
     }))
     .filter((s) => s.whep_url);
 }

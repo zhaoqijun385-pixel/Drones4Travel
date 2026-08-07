@@ -39,7 +39,9 @@ MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API", "https://drone-navigation.com/
 
 CRAZYFLIE_STREAM_URL = os.environ.get("CRAZYFLIE_STREAM_URL", "http://localhost:8082/stream")
 
-STUN_SERVER = "stun:stun.l.google.com:19302"
+# Empty LOCAL_ICE=1 disables STUN (needed for WSL↔local MediaMTX host candidates).
+STUN_SERVER = os.environ.get("STUN_SERVER", "stun:stun.l.google.com:19302")
+LOCAL_ICE = os.environ.get("LOCAL_ICE", "").strip() in ("1", "true", "yes")
 MONITOR_INTERVAL = 10  # seconds between monitor ticks (not necessarily log lines)
 # Periodic STATS/VIEWERS lines are OFF by default — the monitor logs on
 # CHANGE only (viewer count, API up/down, stats errors). Set STATS_INTERVAL_S
@@ -162,9 +164,9 @@ class CrazyflieStreamTrack(VideoStreamTrack):
         return new_frame
 
 
-# STUN server configuration for NAT traversal
+# STUN for NAT; local/WSL MediaMTX often needs host-only ICE (no STUN).
 rtc_config = RTCConfiguration(
-    iceServers=[RTCIceServer(urls=[STUN_SERVER])]
+    iceServers=[] if LOCAL_ICE else [RTCIceServer(urls=[STUN_SERVER])]
 )
 
 

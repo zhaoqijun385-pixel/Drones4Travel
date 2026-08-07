@@ -21,6 +21,12 @@ export default defineConfig({
       allow: ['./'],
     },
     proxy: {
+      // FastAPI (survey / drone / settings / …)
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        ws: true,
+      },
       // Same-origin reachability to the local Synapse homeserver — the SPA
       // never talks to Matrix anywhere else (Caddy mirrors this in prod).
       '/_matrix': {

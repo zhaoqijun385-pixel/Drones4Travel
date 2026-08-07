@@ -5,11 +5,15 @@ const rightItems = reactive([]);
 
 export function useDockRegistry() {
   function registerLeft(item) {
-    leftItems.push(item);
+    const idx = leftItems.findIndex((i) => i.id === item.id);
+    if (idx >= 0) leftItems.splice(idx, 1, item);
+    else leftItems.push(item);
   }
 
   function registerRight(item) {
-    rightItems.push(item);
+    const idx = rightItems.findIndex((i) => i.id === item.id);
+    if (idx >= 0) rightItems.splice(idx, 1, item);
+    else rightItems.push(item);
   }
 
   function unregisterLeft(id) {

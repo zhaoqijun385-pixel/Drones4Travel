@@ -5,6 +5,15 @@ const API_KEY = config.googleApiKey ?? '';
 
 let mapsPromise = null;
 
+/** True when client/config.json has a non-placeholder Maps JS key. */
+export function hasValidGoogleMapsKey() {
+  const key = (API_KEY || '').trim();
+  if (!key) return false;
+  if (key.includes('YOUR_') || key.includes('CHANGE_ME') || key === 'null') return false;
+  // Google browser keys are typically AIza... (39 chars); accept any long non-placeholder string.
+  return key.length >= 20;
+}
+
 /**
  * Dynamically load the Google Maps JavaScript API if it is not already present.
  */
@@ -20,8 +29,10 @@ export function loadGoogleMaps() {
     return mapsPromise;
   }
 
-  if (!API_KEY) {
-    mapsPromise = Promise.reject(new Error('Missing googleApiKey in client/config.json'));
+  if (!hasValidGoogleMapsKey()) {
+    mapsPromise = Promise.reject(
+      new Error('Missing or placeholder googleApiKey in client/config.json (need a real Maps JavaScript API key)'),
+    );
     return mapsPromise;
   }
 

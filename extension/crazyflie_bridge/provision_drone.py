@@ -36,7 +36,11 @@ from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.mem import MemoryElement
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 
-DEFAULT_ADDRESS = 0xE7E7E7E7E7
+DEFAULT_ADDRESS = 0xE7E7E7E7E7  # factory / course-team base
+# Verified local project drone (EEPROM readback)
+PROJECT_CHANNEL = 87
+PROJECT_ADDRESS = 0xE7E787A91D
+PROJECT_URI = 'radio://0/87/2M/E7E787A91D'
 DATARATES = {'250K': 0, '1M': 1, '2M': 2}          # EEPROM byte = combo index (cfclient convention)
 DATARATE_NAMES = {v: k for k, v in DATARATES.items()}
 COURSE_TEAMS = 13                                   # groups in the classroom
@@ -110,9 +114,9 @@ def main():
     target.add_argument('--team', type=int,
                         help=f'course team number 1..{COURSE_TEAMS} -> channel 2N, address E7E7E7E7NN')
     target.add_argument('--channel', type=int,
-                        help='explicit radio channel 0..125 (needs --address too)')
+                        help='explicit radio channel 0..125 (needs --address too); project drone uses 87')
     p.add_argument('--address', type=parse_address,
-                   help='explicit 40-bit radio address, e.g. E7E7E7E707')
+                   help='explicit 40-bit radio address, e.g. E7E787A91D')
     p.add_argument('--datarate', choices=DATARATES.keys(), default='2M')
     p.add_argument('--uri', default='usb://0',
                    help='link used for provisioning (default: usb://0)')

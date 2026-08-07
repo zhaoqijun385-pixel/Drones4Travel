@@ -39,7 +39,7 @@ To assemble the crazyflie 2.1, please refer to the official guideline
 **Radio URI**
 
 - Each script defines a `URI` constant near the top, set to the factory
-  default `radio://0/80/2M/E7E7E7E7E7`.
+  default `radio://0/87/2M/E7E787A91D`.
 - If the drone's EEPROM identity was changed with `provision_drone.py`, edit
   the constant in all three scripts to match (`radio://0/<channel>/2M/<address>`).
 - To read the current identity over a USB cable:

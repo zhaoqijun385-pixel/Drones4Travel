@@ -27,23 +27,24 @@
   "roll_short": "横滚",
   "lat_short": "纬度",
   "lon_short": "经度",
-  "alt_short": "高度"
-  ,"flight_status": "飞行状态"
-  ,"local_drone": "本机无人机"
-  ,"selected_drone": "当前无人机"
-  ,"state": "状态"
-  ,"altitude": "高度"
-  ,"control": "控制权"
-  ,"control_owned": "已取得"
-  ,"control_safe": "安全观察"
-  ,"manual": "手动待命"
-  ,"no_task": "无活动任务"
-  ,"phase_parked": "已停机"
-  ,"phase_queued": "等待放行"
-  ,"phase_takeoff": "正在起飞"
-  ,"phase_enroute": "前往目标"
-  ,"phase_onstation": "执行任务"
-  ,"phase_returning": "正在返航"
-  ,"phase_landing": "正在降落"
-  ,"phase_holding": "保持位置"
+  "alt_short": "高度",
+  "flight_status": "飞行状态",
+  "local_drone": "本机无人机",
+  "selected_drone": "当前无人机",
+  "state": "状态",
+  "altitude": "高度",
+  "control": "控制权",
+  "control_owned": "已取得",
+  "control_safe": "安全观察",
+  "manual": "手动待命",
+  "no_task": "无活动任务",
+  "phase_parked": "已停机",
+  "phase_queued": "等待放行",
+  "phase_takeoff": "正在起飞",
+  "phase_enroute": "前往目标",
+  "phase_onstation": "执行任务",
+  "phase_returning": "正在返航",
+  "phase_landing": "正在降落",
+  "phase_holding": "保持位置",
+  "radio": "电台"
 }

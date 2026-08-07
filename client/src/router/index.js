@@ -9,6 +9,8 @@ import SettingsView from '@/views/SettingsView.vue';
 import MySpaceView from '@/views/MySpaceView.vue';
 import ExtensionsView from '@/views/ExtensionsView.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
+import MissionArenaView from '@/views/MissionArenaView.vue';
+import SurveyMissionView from '@/views/SurveyMissionView.vue';
 
 const routes = [
   {
@@ -79,6 +81,16 @@ const routes = [
     path: '/extensions',
     name: 'Extensions',
     component: ExtensionsView,
+  },
+  {
+    path: '/mission-arena',
+    name: 'MissionArena',
+    component: MissionArenaView,
+  },
+  {
+    path: '/survey-mission',
+    name: 'SurveyMission',
+    component: SurveyMissionView,
   },
 ];
 

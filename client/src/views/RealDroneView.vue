@@ -14,6 +14,7 @@ import { useDroneCommands } from '@shared-composables/useDroneCommands.js';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 import { useAuth } from '@shared-composables/useAuth.js';
 import { useLiveCapture } from '@shared-composables/useLiveCapture.js';
+import { useDroneIdentity } from '@shared-composables/useDroneIdentity.js';
 
 const { t } = useI18n();
 const { settings } = useAppSettings();
@@ -21,6 +22,7 @@ const { settings } = useAppSettings();
 // Live telemetry of the physical drone (singleton WS subscription; feeds
 // the Host subpage's HUD via the ViewComposer's realTelemetry prop).
 const { telemetry: droneTelemetry } = useDroneTelemetry();
+const { identity: droneIdentity, label: droneIdentityLabel } = useDroneIdentity();
 
 // Real flight commands (takeoff/land/hover/move/...) — the separated module.
 const droneCommands = useDroneCommands();
@@ -508,6 +510,8 @@ onMounted(() => {
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
   registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
+  registerPage({ id: 'missionarena', nameKey: 'aerialview.page_missionarena', route: '/mission-arena' });
+  registerPage({ id: 'surveymission', nameKey: 'aerialview.page_surveymission', route: '/survey-mission' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
@@ -650,6 +654,8 @@ onUnmounted(() => {
   unregisterPage('map');
   unregisterPage('myspace');
   unregisterPage('chat');
+  unregisterPage('missionarena');
+  unregisterPage('surveymission');
   unregisterPage('extensions');
 });
 </script>
@@ -664,6 +670,7 @@ onUnmounted(() => {
     :show-hud="isAerialStyle"
     :flight="flight"
     :real-telemetry="droneTelemetry"
+    :drone-identity="droneIdentity"
     @flightMove="onRealFlightMove"
     @flightStop="onRealFlightStop"
     @flightModeChange="onFlightModeChange"
@@ -681,6 +688,9 @@ onUnmounted(() => {
         muted
         playsinline
       />
+      <div v-if="activeSubpage === 'host'" class="drone-id-badge">
+        {{ droneIdentityLabel }}
+      </div>
 
       <!-- Split-layout subpage (Livestream Viewer): two panels
            split by a vertical draggable divider; panel content comes later -->
@@ -704,6 +714,9 @@ onUnmounted(() => {
                 <span class="stream-card__title">{{ s.hostname }}</span>
               </div>
               <p class="stream-card__desc">{{ s.description }}</p>
+              <p v-if="s.radio_uri || (s.id === 'crazyflie-drone' && droneIdentity.radio_uri)" class="stream-card__radio">
+                {{ s.radio_uri || droneIdentity.radio_uri }}
+              </p>
             </div>
           </div>
         </aside>
@@ -751,6 +764,32 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.drone-id-badge {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  pointer-events: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #86efac;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  max-width: 92vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stream-card__radio {
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  color: #166534;
+  font-family: 'Courier New', Courier, monospace;
+  word-break: break-all;
+}
 .split-page {
   position: absolute;
   inset: 0;
