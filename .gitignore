@@ -57,3 +57,10 @@ yarn-error.log*
 logs/
 extension/crazyflie_bridge/cache/
 extension/simple_crazyflie/cache/
+
+# Editor/backup clutter (never commit)
+*.bak
+*.orig
+*.crashed
+*.backup_*
+client/.vite/
