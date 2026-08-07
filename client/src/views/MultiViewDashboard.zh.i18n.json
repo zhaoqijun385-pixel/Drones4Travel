@@ -10,5 +10,7 @@
   "street_view": "街景预览",
   "places_selected": "已选地点",
   "places_clear": "清空",
+  "nearby": "附近推荐",
+  "nearby_loading": "加载中…",
   "start_error": "没有可用的无人机执行观测任务。"
 }

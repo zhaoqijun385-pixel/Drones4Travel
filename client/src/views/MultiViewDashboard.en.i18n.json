@@ -10,5 +10,7 @@
   "street_view": "Street View",
   "places_selected": "Selected places",
   "places_clear": "Clear",
+  "nearby": "Nearby",
+  "nearby_loading": "Loading…",
   "start_error": "No drones available for the observation mission."
 }

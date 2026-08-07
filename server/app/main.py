@@ -33,7 +33,6 @@ from .sim_arena import router as sim_arena_router
 from .survey_mission import router as survey_mission_router
 from .stream import router as stream_router
 from .telemetry import router as telemetry_router
-from .tourism import router as tourism_router
 from .users import auth_backend, fastapi_users, google_oauth_client
 
 logging.basicConfig(level=logging.INFO)
@@ -131,11 +130,8 @@ app.include_router(mission_reports_router, prefix="/api")
 # --- Mission Arena: 2D escort/infiltrate sim (sidelane; no radio) ------------
 app.include_router(sim_arena_router, prefix="/api")
 
-# --- Tourism survey Task1/Task2 (sidelane; dry-run default) ---
+# --- Tourism survey: planning + mission execution (sidelane; dry-run default) ---
 app.include_router(survey_mission_router, prefix="/api")
-
-# --- Tourism observation planning (search / nearby / plan / street view) ----
-app.include_router(tourism_router, prefix="/api")
 
 
 @app.get("/api/health")

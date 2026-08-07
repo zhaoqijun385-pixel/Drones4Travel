@@ -1,6 +1,6 @@
 {
   "secret": "CHANGE_ME_long_random_string_for_jwt_and_tokens",
-  "google_api_key": "",
+  "googleApiKey": "",
   "database_url": "postgresql+asyncpg://DB_USER:DB_PASSWORD@127.0.0.1:5432/drone_navigation",
   "frontend_base_url": "http://localhost:5173",
   "cors_origins": ["http://localhost:5173", "http://127.0.0.1:5173"],

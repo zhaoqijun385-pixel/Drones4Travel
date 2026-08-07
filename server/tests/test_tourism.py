@@ -4,7 +4,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.tourism import _mock_places_autocomplete, _mock_places_nearby, router
+from app.survey_mission import router
 
 
 def make_app():
@@ -13,93 +13,76 @@ def make_app():
     return app
 
 
-class TourismMockTest(unittest.TestCase):
-    def test_mock_places_autocomplete_built_from_shared_hints(self):
-        suggestions = _mock_places_autocomplete("west lake")
-        self.assertTrue(any(s.name == "West Lake" for s in suggestions))
-        self.assertLessEqual(len(suggestions), 8)
-
-    def test_mock_places_nearby_sorted_by_distance(self):
-        places = _mock_places_nearby(30.242, 120.148, max_count=3)
-        self.assertLessEqual(len(places), 3)
-        self.assertEqual("West Lake", places[0].name)
-
-
-class TourismEndpointTest(unittest.TestCase):
+class TourismSearchEndpointTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(make_app())
 
-    def test_plan_with_coordinates_returns_five_points(self):
-        response = self.client.post(
-            "/api/tourism/plan",
-            json={"query": "", "latitude": 31.24, "longitude": 121.49},
-        )
-        self.assertEqual(200, response.status_code)
-        data = response.json()
-        self.assertEqual(5, len(data["observation_points"]))
-        top = data["observation_points"][-1]
-        self.assertEqual(120, top["altitude"])
-        self.assertAlmostEqual(31.24, top["latitude"], places=4)
-        for point in data["observation_points"][:4]:
-            self.assertEqual(60, point["altitude"])
-
-    def test_plan_with_hint_place_uses_survey_geocoder(self):
-        # "west lake" resolves through survey_mission's shared hint list, no network.
-        response = self.client.post(
-            "/api/tourism/plan",
-            json={"query": "west lake"},
-        )
-        self.assertEqual(200, response.status_code)
-        data = response.json()
-        self.assertEqual(5, len(data["observation_points"]))
-        self.assertAlmostEqual(30.242, data["place"]["latitude"], places=2)
-
-    def test_plan_unknown_place_returns_404(self):
-        with patch("app.survey_mission._fetch_json", return_value=(None, "test-offline")):
-            response = self.client.post(
-                "/api/tourism/plan",
-                json={"query": "xyz-not-a-real-place-12345"},
-            )
-        self.assertEqual(404, response.status_code)
-
-    def test_suggest_falls_back_to_hints_without_key(self):
-        with patch("app.tourism._google_key", return_value=""):
+    def test_suggest_without_key_returns_empty(self):
+        with patch("app.survey_mission._google_key", return_value=""):
             response = self.client.get(
-                "/api/tourism/suggest",
-                params={"query": "west lake", "language": "zh-CN"},
+                "/api/survey/suggest",
+                params={"query": "eiffel", "language": "zh-CN"},
             )
         self.assertEqual(200, response.status_code)
-        self.assertIn("suggestions", response.json())
-        self.assertTrue(response.json()["suggestions"])
+        self.assertEqual([], response.json()["suggestions"])
 
-    def test_nearby_falls_back_to_hints_without_key(self):
-        with patch("app.tourism._google_key", return_value=""):
+    def test_suggest_parses_google_predictions(self):
+        fake_data = {
+            "status": "OK",
+            "predictions": [
+                {
+                    "place_id": "p1",
+                    "description": "Eiffel Tower, Paris",
+                    "structured_formatting": {"main_text": "Eiffel Tower", "secondary_text": "Paris"},
+                }
+            ],
+        }
+        with patch("app.survey_mission._google_key", return_value="fake-key"):
+            with patch("app.survey_mission._fetch_json", return_value=(fake_data, "test")):
+                response = self.client.get(
+                    "/api/survey/suggest",
+                    params={"query": "eiffel", "language": "zh-CN"},
+                )
+        self.assertEqual(200, response.status_code)
+        suggestions = response.json()["suggestions"]
+        self.assertEqual(1, len(suggestions))
+        self.assertEqual("Eiffel Tower", suggestions[0]["name"])
+        self.assertEqual("Paris", suggestions[0]["address"])
+
+    def test_nearby_without_key_returns_empty(self):
+        with patch("app.survey_mission._google_key", return_value=""):
             response = self.client.get(
-                "/api/tourism/places/nearby",
-                params={"lat": 30.242, "lng": 120.148, "radius": 1000},
+                "/api/survey/places/nearby",
+                params={"lat": 48.8584, "lng": 2.2945, "radius": 1000},
             )
         self.assertEqual(200, response.status_code)
-        self.assertIn("places", response.json())
+        self.assertEqual([], response.json()["places"])
 
-    def test_streetview_without_key_reports_unavailable(self):
-        with patch("app.tourism._google_key", return_value=""):
-            response = self.client.get(
-                "/api/tourism/streetview",
-                params={"lat": 31.24, "lng": 121.49},
-            )
+    def test_nearby_parses_google_results(self):
+        fake_data = {
+            "status": "OK",
+            "results": [
+                {
+                    "place_id": "n1",
+                    "name": "Champ de Mars",
+                    "vicinity": "Paris",
+                    "geometry": {"location": {"lat": 48.85, "lng": 2.29}},
+                    "types": ["park"],
+                    "rating": 4.6,
+                }
+            ],
+        }
+        with patch("app.survey_mission._google_key", return_value="fake-key"):
+            with patch("app.survey_mission._fetch_json", return_value=(fake_data, "test")):
+                response = self.client.get(
+                    "/api/survey/places/nearby",
+                    params={"lat": 48.8584, "lng": 2.2945, "radius": 1000},
+                )
         self.assertEqual(200, response.status_code)
-        self.assertFalse(response.json()["available"])
-
-    def test_batch_plan_skips_unresolvable_queries(self):
-        with patch("app.survey_mission._fetch_json", return_value=(None, "test-offline")):
-            response = self.client.post(
-                "/api/tourism/plan/batch",
-                json={"queries": ["xyz-not-a-real-place-12345"], "places": [{"latitude": 1.0, "longitude": 2.0}]},
-            )
-        self.assertEqual(200, response.status_code)
-        results = response.json()["results"]
-        self.assertEqual(1, len(results))  # only the coordinate place survives
-        self.assertEqual(5, len(results[0]["observation_points"]))
+        places = response.json()["places"]
+        self.assertEqual(1, len(places))
+        self.assertEqual("Champ de Mars", places[0]["name"])
+        self.assertEqual(4.6, places[0]["rating"])
 
 
 if __name__ == "__main__":

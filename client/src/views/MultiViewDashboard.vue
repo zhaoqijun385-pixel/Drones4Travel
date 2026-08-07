@@ -12,6 +12,7 @@ import { prewarmStreetView } from '@/3d_street/streetView.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useDroneFleet } from '@shared-composables/useDroneFleet.js';
 import { useConnectionStatus, checkGoogleConnection } from '@shared-composables/useConnectionStatus.js';
+import { fetchNearbyPlaces, nearbyPlaces, nearbyLoading } from '@shared-composables/useTourism.js';
 
 const { t } = useI18n();
 const fleet = useDroneFleet();
@@ -165,6 +166,24 @@ function stopTourism() {
   fleet.stopDemoMission();
 }
 
+const missionPaused = computed(() => Boolean(mission.value?.paused));
+
+function toggleTourismPause() {
+  if (missionPaused.value) fleet.resumeTourismMission();
+  else fleet.pauseTourismMission();
+}
+
+function onRetryTourism() {
+  if (!fleet.retryTourismMission()) return;
+  processedObservationKeys = new Set();
+  tourismPhotos.value = [];
+  activePhotoId.value = null;
+  tourismPhotoTotal.value = observationPoints.value.length || mission.value?.photoCount || 0;
+  if (mission.value?.target) {
+    flyToTourismTarget(mission.value.target);
+  }
+}
+
 function onTourismSelect(place) {
   tourismSelection.value = place;
   const lat = Number(place.lat ?? place.latitude);
@@ -177,7 +196,24 @@ function onTourismSelect(place) {
       longitude: lon,
     });
     syncMapsTo(lat, lon);
+    loadNearby(lat, lon);
   }
+}
+
+function loadNearby(lat, lon) {
+  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lon))) return;
+  fetchNearbyPlaces(Number(lat), Number(lon), 1500);
+}
+
+function onNearbyPick(place) {
+  if (!place || !Number.isFinite(Number(place.latitude)) || !Number.isFinite(Number(place.longitude))) return;
+  addTourismPlace({
+    name: place.name,
+    address: place.address || place.name,
+    latitude: place.latitude,
+    longitude: place.longitude,
+  });
+  syncMapsTo(Number(place.latitude), Number(place.longitude), 15);
 }
 
 function addTourismPlace(place) {
@@ -219,6 +255,7 @@ async function onMapPick({ lat, lng }) {
   }
   addTourismPlace({ name, address: name, latitude: lat, longitude: lng });
   syncMapsTo(lat, lng);
+  loadNearby(lat, lng);
 }
 
 // Fly both the 2D map and the 3D (Cesium) camera to the same location.
@@ -691,10 +728,14 @@ async function captureTourismPhoto(observation) {
 }
 
 async function handleObservationCaptured(observation) {
+  const missionIdAtStart = mission.value?.id;
   flyMapToObservation(observation);
   flyCesiumToPoint(observation);
   setStreetViewPoint(observation);
   const photo = await captureTourismPhoto(observation);
+  // The mission may have been retried or cancelled while the screenshot was
+  // being produced — discard stale photos so they never land in a new run.
+  if (mission.value?.id !== missionIdAtStart) return;
   tourismPhotos.value.push(photo);
   streetViewFallback.value = photo.dataUrl;
 }
@@ -916,6 +957,18 @@ onUnmounted(() => {
         >
       </div>
 
+      <div v-if="mission" class="tourism-controls">
+        <button type="button" @click="toggleTourismPause">
+          {{ mission.paused ? t('multiviewdashboard.resume') : t('multiviewdashboard.pause') }}
+        </button>
+        <button type="button" @click="onRetryTourism">
+          {{ t('multiviewdashboard.retry') }}
+        </button>
+        <button type="button" class="tourism-controls__danger" @click="stopTourism">
+          {{ t('multiviewdashboard.cancel') }}
+        </button>
+      </div>
+
       <div v-if="tourismPhotos.length" class="tourism-photos">
         <div class="tourism-photos__head">
           <span>{{ t('multiviewdashboard.photos_taken') }}</span>
@@ -955,6 +1008,22 @@ onUnmounted(() => {
             <button type="button" class="tourism-places__remove" @click="removeTourismPlace(index)">&times;</button>
           </li>
         </ul>
+        <div v-if="nearbyPlaces.length" class="tourism-nearby">
+          <div class="tourism-nearby__head">
+            <span>{{ t('multiviewdashboard.nearby') }}</span>
+            <small v-if="nearbyLoading">{{ t('multiviewdashboard.nearby_loading') }}</small>
+          </div>
+          <ul class="tourism-nearby__list">
+            <li
+              v-for="place in nearbyPlaces"
+              :key="place.place_id || `${place.latitude}-${place.longitude}`"
+              @click="onNearbyPick(place)"
+            >
+              <span class="tourism-nearby__name">{{ place.name }}</span>
+              <span v-if="place.rating" class="tourism-nearby__rating">★{{ place.rating }}</span>
+            </li>
+          </ul>
+        </div>
       </div>
     </template>
 
@@ -1215,6 +1284,69 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
+.tourism-nearby {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tourism-nearby__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.tourism-nearby__head span {
+  color: rgba(206, 228, 242, 0.68);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+}
+
+.tourism-nearby__head small {
+  color: rgba(206, 228, 242, 0.5);
+  font-size: 0.6rem;
+}
+
+.tourism-nearby__list {
+  display: grid;
+  gap: 2px;
+  max-height: 96px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tourism-nearby__list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.tourism-nearby__list li:hover {
+  background: rgba(83, 183, 255, 0.14);
+}
+
+.tourism-nearby__name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tourism-nearby__rating {
+  flex: 0 0 auto;
+  color: #f1c40f;
+  font-size: 0.62rem;
+}
+
 .street-view-window {
   position: fixed;
   top: 76px;
@@ -1269,6 +1401,45 @@ onUnmounted(() => {
   height: 100%;
   object-fit: cover;
   background: #0b1620;
+}
+
+.tourism-controls {
+  position: fixed;
+  top: 76px;
+  right: 18px;
+  z-index: 66;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid rgba(83, 183, 255, 0.32);
+  border-radius: 8px;
+  background: rgba(5, 16, 27, 0.82);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.35);
+}
+
+.tourism-controls button {
+  padding: 6px 12px;
+  border: 1px solid rgba(83, 183, 255, 0.32);
+  border-radius: 6px;
+  background: rgba(83, 183, 255, 0.12);
+  color: #dff4ff;
+  font-family: 'Calibri', 'Segoe UI', sans-serif;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tourism-controls button:hover {
+  border-color: #53b7ff;
+  background: rgba(83, 183, 255, 0.24);
+}
+
+.tourism-controls .tourism-controls__danger {
+  border-color: rgba(255, 107, 95, 0.42);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
 }
 
 .multiview-mode-bar {

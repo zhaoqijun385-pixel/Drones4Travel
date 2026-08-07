@@ -244,6 +244,9 @@ function tickDemoFleet() {
 
   const mission = activeMission.value;
   if (!mission) return;
+  // Tourism missions support pause: freeze mission advancement while the
+  // fleet keeps rendering (drones hold their last positions).
+  if (mission.kind === 'tourism' && mission.paused) return;
   let completeCount = 0;
   const nextStates = mission.kind === 'tourism'
     ? advanceTourismMission(mission, delta)
@@ -845,6 +848,40 @@ function stopDemoMission() {
   });
 }
 
+// Tourism mission execution controls (mirrors the survey mission lifecycle):
+// pause/resume freezes the state machine, cancel stops it, retry restarts it.
+function pauseTourismMission() {
+  const mission = activeMission.value;
+  if (mission?.kind === 'tourism') mission.paused = true;
+}
+
+function resumeTourismMission() {
+  const mission = activeMission.value;
+  if (mission?.kind === 'tourism') mission.paused = false;
+}
+
+function retryTourismMission() {
+  const mission = activeMission.value;
+  if (mission?.kind !== 'tourism') return false;
+  mission.paused = false;
+  mission.completed = false;
+  mission.observations = [];
+  mission.routes.forEach((route) => {
+    route.elapsedMs = 0;
+    route.complete = false;
+    route.observationRecorded = false;
+    const drone = drones[route.droneId];
+    if (drone) {
+      drone.route = tourismRoutePolyline(route).map((point) => ({ ...point }));
+      drone.phase = 'queued';
+      drone.missionProgress = 0;
+      drone.sequence += 1;
+    }
+  });
+  demoMissionLastTickAt = Date.now();
+  return true;
+}
+
 function setSharedTarget(target) {
   if (!target) {
     sharedTarget.value = null;
@@ -998,6 +1035,9 @@ export function useDroneFleet() {
     navigateDroneTo,
     gatherAt,
     stopDemoMission,
+    pauseTourismMission,
+    resumeTourismMission,
+    retryTourismMission,
     setSharedTarget,
     applyDemoCommand,
     applyDemoMove,

@@ -1,0 +1,197 @@
+<script setup>
+import { ref, computed, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
+import {
+  TOURISM_DEFAULTS,
+  resolveTourismTarget,
+  searchTourismPlaces,
+} from '@shared-composables/tourismObservationPlanner.js';
+
+const { t } = useI18n();
+
+const props = defineProps({
+  open: { type: Boolean, default: false },
+  mission: { type: Object, default: null },
+  error: { type: String, default: '' },
+  isRunning: { type: Boolean, default: false },
+});
+
+const emit = defineEmits(['close', 'start', 'stop']);
+
+const placeQuery = ref('');
+const radiusM = ref(TOURISM_DEFAULTS.radiusM);
+const minAltM = ref(TOURISM_DEFAULTS.minAltM);
+const photoCount = ref(TOURISM_DEFAULTS.photoCount);
+const selectedPlace = ref(null);
+
+const suggestions = computed(() => searchTourismPlaces(placeQuery.value, 7));
+const currentPlace = computed(() => props.mission?.target?.name || '');
+const totalPhotos = computed(() => props.mission?.photoCount || 0);
+const capturedPhotos = computed(() => props.mission?.observations?.length || 0);
+const progress = computed(() => {
+  if (!props.mission || !totalPhotos.value) return 0;
+  return Math.min(100, Math.round((capturedPhotos.value / totalPhotos.value) * 100));
+});
+const canStart = computed(() => selectedPlace.value && !props.isRunning && !props.mission);
+
+function selectSuggestion(place) {
+  placeQuery.value = place.name;
+  selectedPlace.value = place;
+}
+
+function changeCount(delta) {
+  photoCount.value = Math.max(5, Math.min(12, photoCount.value + delta));
+}
+
+function startMission() {
+  if (!selectedPlace.value) return;
+  const target = resolveTourismTarget(placeQuery.value);
+  if (!target) return;
+  emit('start', {
+    target,
+    radiusM: Number(radiusM.value) || TOURISM_DEFAULTS.radiusM,
+    minAltM: Number(minAltM.value) || TOURISM_DEFAULTS.minAltM,
+    photoCount: photoCount.value,
+  });
+}
+
+function stopMission() {
+  emit('stop');
+}
+
+watch(() => props.open, (open) => {
+  if (open && props.mission) {
+    // 无需额外操作
+  }
+});
+</script>
+
+<template>
+  <aside class="tourism-panel" :class="{ 'tourism-panel--hidden': !open }">
+    <header class="tourism-panel__header">
+      <div class="tourism-panel__identity">
+        <span class="tourism-panel__eyebrow">{{ t('tourismobservationpanel.eyebrow') }}</span>
+        <strong>{{ t('tourismobservationpanel.title') }}</strong>
+      </div>
+      <button class="tourism-panel__close" @click="emit('close')">&times;</button>
+    </header>
+
+    <div v-if="!mission" class="tourism-panel__form">
+      <label class="tourism-panel__field tourism-panel__field--place">
+        <span>{{ t('tourismobservationpanel.place') }}</span>
+        <input v-model="placeQuery" type="search" autocomplete="off" :placeholder="t('tourismobservationpanel.place_placeholder')" @keyup.enter.prevent="startMission">
+      </label>
+      <div v-if="suggestions.length" class="tourism-panel__suggestions" role="listbox">
+        <button v-for="place in suggestions" :key="place.id" role="option" @click="selectSuggestion(place)">
+          <b>{{ place.name }}</b>
+          <span>{{ place.lat.toFixed(3) }}, {{ place.lon.toFixed(3) }}</span>
+        </button>
+      </div>
+
+      <div class="tourism-panel__controls">
+        <label class="tourism-panel__field">
+          <span>{{ t('tourismobservationpanel.radius') }}</span>
+          <input v-model.number="radiusM" type="number" min="40" max="2000" step="10">
+          <small>m</small>
+        </label>
+        <label class="tourism-panel__field">
+          <span>{{ t('tourismobservationpanel.altitude') }}</span>
+          <input v-model.number="minAltM" type="number" min="20" max="1000" step="10">
+          <small>m</small>
+        </label>
+      </div>
+
+      <div class="tourism-panel__count">
+        <span>{{ t('tourismobservationpanel.photos') }}</span>
+        <div class="tourism-panel__stepper">
+          <button @click="changeCount(-1)">-</button>
+          <b>{{ photoCount }}</b>
+          <button @click="changeCount(1)">+</button>
+        </div>
+      </div>
+
+      <p v-if="error" class="tourism-panel__error">{{ error }}</p>
+
+      <button class="tourism-panel__start" :disabled="!canStart" @click="startMission">
+        {{ t('tourismobservationpanel.start') }}
+      </button>
+    </div>
+
+    <div v-else class="tourism-panel__status">
+      <div class="tourism-panel__target">
+        <span class="tourism-panel__status-dot" />
+        <div>
+          <small>{{ t('tourismobservationpanel.observing') }}</small>
+          <strong>{{ currentPlace }}</strong>
+        </div>
+      </div>
+      <div class="tourism-panel__progress">
+        <i><b :style="{ width: `${progress}%` }" /></i>
+        <span>{{ capturedPhotos }} / {{ totalPhotos }}</span>
+      </div>
+      <div v-if="!isRunning" class="tourism-panel__info">
+        {{ progress === 100 ? '✅ 任务完成' : '⏸️ 已暂停' }}
+      </div>
+      <button v-if="isRunning" class="tourism-panel__stop" @click="stopMission">
+        {{ t('tourismobservationpanel.stop') }}
+      </button>
+    </div>
+  </aside>
+</template>
+
+<style scoped>
+.tourism-panel {
+  position: fixed;
+  top: 24px;
+  left: 86px;
+  z-index: 70;
+  width: min(320px, calc(100vw - 110px));
+  padding: 14px;
+  border: 1px solid rgba(83, 183, 255, 0.38);
+  border-radius: 8px;
+  background: rgba(5, 16, 27, 0.88);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38), inset 0 1px rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  color: rgba(239, 248, 255, 0.94);
+  font-family: 'Calibri', 'Segoe UI', sans-serif;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.tourism-panel--hidden { opacity: 0; pointer-events: none; transform: translateY(-6px); }
+.tourism-panel__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+.tourism-panel__eyebrow { display: block; margin-bottom: 4px; color: #6dc7e8; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+.tourism-panel__header strong { font-size: 0.92rem; letter-spacing: 0.02em; }
+.tourism-panel__close { flex: 0 0 auto; width: 28px; height: 28px; border: 1px solid rgba(255,255,255,0.16); border-radius: 6px; background: rgba(255,255,255,0.05); color: rgba(239,248,255,0.8); font: 600 0.95rem/1 sans-serif; cursor: pointer; }
+.tourism-panel__form { display: grid; gap: 10px; padding-top: 12px; }
+.tourism-panel__field { position: relative; display: grid; gap: 5px; }
+.tourism-panel__field > span, .tourism-panel__count > span { color: rgba(206,228,242,0.68); font-size: 0.66rem; letter-spacing: 0.04em; }
+.tourism-panel__field input { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid rgba(83,183,255,0.3); border-radius: 6px; background: rgba(255,255,255,0.06); color: #e8f7ff; font: inherit; font-size: 0.78rem; outline: none; }
+.tourism-panel__field input:focus { border-color: #53b7ff; background: rgba(83,183,255,0.1); }
+.tourism-panel__field--place { z-index: 2; }
+.tourism-panel__field small { position: absolute; right: 10px; bottom: 9px; color: rgba(206,228,242,0.5); font-size: 0.62rem; pointer-events: none; }
+.tourism-panel__suggestions { display: grid; gap: 3px; margin-top: -6px; padding: 6px; border: 1px solid rgba(83,183,255,0.25); border-radius: 6px; background: rgba(7,20,33,0.95); }
+.tourism-panel__suggestions button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: rgba(239,248,255,0.88); text-align: left; cursor: pointer; }
+.tourism-panel__suggestions button:hover { background: rgba(83,183,255,0.16); }
+.tourism-panel__suggestions b { min-width: 0; overflow: hidden; font-size: 0.74rem; text-overflow: ellipsis; white-space: nowrap; }
+.tourism-panel__suggestions span { flex: 0 0 auto; color: rgba(206,228,242,0.5); font-size: 0.6rem; font-variant-numeric: tabular-nums; }
+.tourism-panel__controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tourism-panel__count { display: flex; align-items: center; justify-content: space-between; padding: 4px 2px; }
+.tourism-panel__stepper { display: flex; align-items: center; gap: 8px; }
+.tourism-panel__stepper button { width: 28px; height: 28px; border: 1px solid rgba(83,183,255,0.32); border-radius: 6px; background: rgba(83,183,255,0.1); color: #dff4ff; font: 600 0.9rem/1 sans-serif; cursor: pointer; }
+.tourism-panel__stepper b { min-width: 24px; color: #63e6be; font-size: 0.9rem; text-align: center; font-variant-numeric: tabular-nums; }
+.tourism-panel__error { margin: 0; color: #fca5a5; font-size: 0.66rem; }
+.tourism-panel__start, .tourism-panel__stop { width: 100%; padding: 9px 10px; border: 1px solid rgba(99,230,190,0.42); border-radius: 6px; background: rgba(16,185,129,0.16); color: #a7f3d0; font: 600 0.76rem/1 sans-serif; letter-spacing: 0.04em; cursor: pointer; }
+.tourism-panel__start:disabled { cursor: not-allowed; opacity: 0.42; }
+.tourism-panel__status { display: grid; gap: 12px; padding-top: 12px; }
+.tourism-panel__target { display: flex; align-items: center; gap: 10px; }
+.tourism-panel__status-dot { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: #63e6be; box-shadow: 0 0 10px rgba(99,230,190,0.8); animation: tourism-pulse 1.4s ease-in-out infinite; }
+.tourism-panel__target small { display: block; margin-bottom: 2px; color: rgba(206,228,242,0.6); font-size: 0.62rem; }
+.tourism-panel__target strong { display: block; overflow: hidden; font-size: 0.84rem; text-overflow: ellipsis; white-space: nowrap; }
+.tourism-panel__progress { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.tourism-panel__progress i { height: 5px; overflow: hidden; border-radius: 3px; background: rgba(255,255,255,0.08); }
+.tourism-panel__progress i b { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #53b7ff, #63e6be); transition: width 0.25s ease; }
+.tourism-panel__progress span { color: #6dc7e8; font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+.tourism-panel__info { text-align: center; font-size: 0.78rem; color: #b0d4e8; }
+.tourism-panel__stop { border-color: rgba(255,107,95,0.42); background: rgba(248,113,113,0.12); color: #fecaca; }
+@keyframes tourism-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (max-width: 768px) { .tourism-panel { left: 70px; top: 16px; width: min(300px, calc(100vw - 90px)); } }
+</style>

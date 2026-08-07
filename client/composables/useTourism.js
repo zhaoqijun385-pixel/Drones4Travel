@@ -1,6 +1,6 @@
 ﻿/**
  * Tourism module composable  --  address search, place suggestions,
- * nearby discovery, observation planning, and Street View helpers.
+ * nearby discovery and observation planning helpers.
  */
 
 import { ref, computed } from 'vue';
@@ -53,16 +53,10 @@ export const selectedPlaces = ref([]);
 export const nearbyPlaces = ref([]);
 export const nearbyLoading = ref(false);
 
-export const planResults = ref([]);
-export const planLoading = ref(false);
-
-export const streetViewStatus = ref(null);
-export const streetViewLoading = ref(false);
-
 export const error = ref(null);
 
 // ---------------------------------------------------------------------------
-// Autocomplete (GET /api/tourism/suggest)
+// Autocomplete (GET /api/survey/suggest)
 // ---------------------------------------------------------------------------
 
 export async function fetchSuggestions(query) {
@@ -73,7 +67,7 @@ export async function fetchSuggestions(query) {
   searching.value = true;
   error.value = null;
   try {
-    const url = apiUrl(`/tourism/suggest?query=${encodeURIComponent(query.trim())}&language=zh-CN`);
+    const url = apiUrl(`/survey/suggest?query=${encodeURIComponent(query.trim())}&language=zh-CN`);
     const res = await fetch(url);
     if (!res.ok) throw new Error(await errorDetail(res));
     const data = await safeJson(res);
@@ -88,14 +82,14 @@ export async function fetchSuggestions(query) {
 }
 
 // ---------------------------------------------------------------------------
-// Nearby places (GET /api/tourism/places/nearby)
+// Nearby places (GET /api/survey/places/nearby)
 // ---------------------------------------------------------------------------
 
 export async function fetchNearbyPlaces(lat, lng, radius = 1000) {
   nearbyLoading.value = true;
   error.value = null;
   try {
-    const url = apiUrl(`/tourism/places/nearby?lat=${lat}&lng=${lng}&radius=${radius}&language=zh-CN`);
+    const url = apiUrl(`/survey/places/nearby?lat=${lat}&lng=${lng}&radius=${radius}&language=zh-CN`);
     const res = await fetch(url);
     if (!res.ok) throw new Error(await errorDetail(res));
     const data = await safeJson(res);
@@ -108,80 +102,6 @@ export async function fetchNearbyPlaces(lat, lng, radius = 1000) {
     return [];
   } finally {
     nearbyLoading.value = false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Single place plan (POST /api/tourism/plan)
-// ---------------------------------------------------------------------------
-
-export async function planSingle(query) {
-  planLoading.value = true;
-  error.value = null;
-  try {
-    const res = await fetch(apiUrl('/tourism/plan'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
-    });
-    const data = await safeJson(res);
-    if (!res.ok) throw new Error(data?.detail || `Plan failed (status ${res.status})`);
-    return data;
-  } catch (e) {
-    console.error('[useTourism] plan failed:', e);
-    error.value = e.message;
-    return null;
-  } finally {
-    planLoading.value = false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Batch plan (POST /api/tourism/plan/batch)
-// ---------------------------------------------------------------------------
-
-export async function planBatch(queries) {
-  planLoading.value = true;
-  error.value = null;
-  try {
-    const res = await fetch(apiUrl('/tourism/plan/batch'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ queries }),
-    });
-    const data = await safeJson(res);
-    if (!res.ok) throw new Error(data?.detail || `Batch plan failed (status ${res.status})`);
-    planResults.value = data.results || [];
-    return data;
-  } catch (e) {
-    console.error('[useTourism] batch plan failed:', e);
-    error.value = e.message;
-    planResults.value = [];
-    return null;
-  } finally {
-    planLoading.value = false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Street View check (GET /api/tourism/streetview)
-// ---------------------------------------------------------------------------
-
-export async function checkStreetView(lat, lng, radius = 50) {
-  streetViewLoading.value = true;
-  try {
-    const url = apiUrl(`/tourism/streetview?lat=${lat}&lng=${lng}&radius=${radius}`);
-    const res = await fetch(url);
-    const data = await safeJson(res);
-    if (!res.ok) throw new Error(data?.detail || `Street View check failed (status ${res.status})`);
-    streetViewStatus.value = data;
-    return data;
-  } catch (e) {
-    console.error('[useTourism] streetview check failed:', e);
-    streetViewStatus.value = null;
-    return null;
-  } finally {
-    streetViewLoading.value = false;
   }
 }
 
@@ -204,8 +124,6 @@ export function removePlace(index) {
 
 export function clearPlaces() {
   selectedPlaces.value = [];
-  planResults.value = [];
-  streetViewStatus.value = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,10 +136,4 @@ export function staticMapUrl(lat, lng, zoom = 16, size = '400x200') {
   const key = config.googleApiKey || '';
   if (!key) return '';
   return `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${zoom}&size=${size}&markers=color:red%7C${lat},${lng}&key=${key}`;
-}
-
-export function streetViewImageUrl(lat, lng, heading = 0, size = '400x200') {
-  const key = config.googleApiKey || '';
-  if (!key) return '';
-  return `https://maps.googleapis.com/maps/api/streetview?location=${lat},${lng}&heading=${heading}&size=${size}&fov=90&key=${key}`;
 }

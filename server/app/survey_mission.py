@@ -19,7 +19,7 @@ from typing import Any
 from urllib.parse import quote_plus
 from urllib.request import ProxyHandler, Request, build_opener
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -912,3 +912,77 @@ async def mission_ws(websocket: WebSocket, mission_id: str) -> None:
         pass
     finally:
         _ws_clients.get(mission_id, set()).discard(websocket)
+
+
+# ---------------------------------------------------------------------------
+# Place search supplements (Autocomplete / Nearby)
+# ---------------------------------------------------------------------------
+# These extend the survey module's planning flow with Google Places lookups.
+# They deliberately return EMPTY results when the key is missing or Google is
+# unreachable — no mock/fake data. Geocoding stays on _geocode (hints ->
+# Google -> Nominatim) so every planner shares one resolver.
+
+
+@router.get("/survey/suggest")
+async def suggest_places(
+    query: str = Query(min_length=1, max_length=200, description="Place name or address fragment"),
+    language: str = Query(default="zh-CN", max_length=10),
+) -> dict:
+    """Places Autocomplete — like typing an address in a navigation app."""
+    key = _google_key()
+    if not key:
+        return {"suggestions": []}
+    url = (
+        "https://maps.googleapis.com/maps/api/place/autocomplete/json?"
+        f"input={quote_plus(query)}&key={key}&language={quote_plus(language)}"
+    )
+    data, _via = _fetch_json(url, timeout=12)
+    suggestions: list[dict] = []
+    if isinstance(data, dict) and data.get("status") in ("OK", "ZERO_RESULTS"):
+        for pred in data.get("predictions", [])[:8]:
+            structured = pred.get("structured_formatting", {})
+            suggestions.append(
+                {
+                    "place_id": pred.get("place_id", ""),
+                    "name": structured.get("main_text", pred.get("description", "")),
+                    "address": structured.get("secondary_text", ""),
+                    "latitude": None,
+                    "longitude": None,
+                }
+            )
+    return {"suggestions": suggestions}
+
+
+@router.get("/survey/places/nearby")
+async def nearby_places(
+    lat: float = Query(ge=-90, le=90),
+    lng: float = Query(ge=-180, le=180),
+    radius: int = Query(default=1000, ge=50, le=5000),
+    language: str = Query(default="zh-CN", max_length=10),
+) -> dict:
+    """Tourist attractions near a coordinate (Google Places Nearby)."""
+    key = _google_key()
+    if not key:
+        return {"places": []}
+    url = (
+        "https://maps.googleapis.com/maps/api/place/nearbysearch/json?"
+        f"location={lat},{lng}&radius={radius}&key={key}"
+        f"&language={quote_plus(language)}&type=tourist_attraction"
+    )
+    data, _via = _fetch_json(url, timeout=12)
+    places: list[dict] = []
+    if isinstance(data, dict) and data.get("status") in ("OK", "ZERO_RESULTS"):
+        for item in data.get("results", [])[:10]:
+            geo = item.get("geometry", {}).get("location", {})
+            places.append(
+                {
+                    "place_id": item.get("place_id", ""),
+                    "name": item.get("name", ""),
+                    "address": item.get("vicinity", ""),
+                    "latitude": geo.get("lat", 0.0),
+                    "longitude": geo.get("lng", 0.0),
+                    "types": item.get("types", []),
+                    "rating": item.get("rating"),
+                }
+            )
+    return {"places": places}
