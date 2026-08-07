@@ -29,9 +29,13 @@ const props = defineProps({
   mapHeading: { type: Number, default: null },
   /** Optional map tilt (deg 0–67.5). Mission Arena observer look-down. */
   mapTilt: { type: Number, default: null },
+  poiMarkers: { type: Array, default: () => [] },
+  selectedPlaces: { type: Array, default: () => [] },
+  observationPlan: { type: Array, default: () => [] },
+  pickEnabled: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'droneSelect', 'poisFound', 'poisError', 'routeFound', 'routeError']);
+const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'mapPick', 'droneSelect', 'poisFound', 'poisError', 'routeFound', 'routeError']);
 
 const containerRef = ref(null);
 const map = ref(null);
@@ -69,6 +73,11 @@ let clickListener = null;    // Google Maps click listener for picking mode
 let mapsApi = null;          // loaded Google Maps API namespace
 const fleetMarkers = new Map();
 const fleetRoutes = new Map();
+const selectedPlaceMarkers = new Map();
+const planMarkers = new Map();
+const planPolylines = new Map();
+let poiOverlay = null;
+let poiContainer = null;
 let targetMarker = null;
 let lastFleetBoundsSignature = '';
 
@@ -170,6 +179,244 @@ function syncFleetMarkers() {
       });
     }
     targetMarker.setPosition(targetPosition);
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[ch]);
+}
+
+// Navigation-style POI pin: a colored pill with a pin icon and the place name.
+function makePoiMarkerContent(item) {
+  const wrap = document.createElement('div');
+  wrap.className = 'poi-marker';
+  if (item.selected) wrap.classList.add('poi-marker--selected');
+  if (item.kind === 'observation') wrap.classList.add('poi-marker--observation');
+  if (item.kind === 'target') wrap.classList.add('poi-marker--target');
+  wrap.innerHTML = `
+    <svg class="poi-marker__pin" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path d="M12 2C8.1 2 5 5.1 5 9c0 5.2 7 13 7 13s7-7.8 7-13c0-3.9-3.1-7-7-7z" fill="currentColor"/>
+      <circle cx="12" cy="9" r="3" fill="#fff"/>
+    </svg>
+    <span class="poi-marker__label">${escapeHtml(item.name)}</span>
+  `;
+  return wrap;
+}
+
+// Custom overlay for navigation-style POI pins. Google's AdvancedMarkerElement
+// requires a Map ID configured in the Cloud console, which this project does
+// not have, so a plain OverlayView keeps the labels working with any key.
+function ensurePoiOverlay() {
+  if (poiOverlay || !map.value || !mapsApi?.OverlayView) return poiOverlay;
+  poiContainer = document.createElement('div');
+  poiContainer.className = 'poi-overlay';
+  poiOverlay = new mapsApi.OverlayView();
+  poiOverlay.onAdd = () => {
+    poiOverlay.getPanes().overlayMouseTarget.appendChild(poiContainer);
+  };
+  poiOverlay.draw = () => {
+    const projection = poiOverlay.getProjection();
+    if (!projection || !poiContainer) return;
+    poiContainer.querySelectorAll('.poi-marker').forEach((el) => {
+      const lat = Number(el.dataset.lat);
+      const lng = Number(el.dataset.lng);
+      const point = projection.fromLatLngToDivPixel(new mapsApi.LatLng(lat, lng));
+      if (!point) {
+        el.style.display = 'none';
+        return;
+      }
+      el.style.display = '';
+      el.style.transform = `translate(${point.x}px, ${point.y}px) translate(-50%, -100%)`;
+    });
+  };
+  poiOverlay.setMap(map.value);
+  return poiOverlay;
+}
+
+// Render the tourism places/observation points on the 2D map, each with a
+// readable name label, like navigation software POIs.
+function syncPoiMarkers() {
+  if (!map.value || !mapsApi?.OverlayView) return;
+  const overlay = ensurePoiOverlay();
+  if (!overlay || !poiContainer) return;
+  const activeIds = new Set();
+  for (const item of props.poiMarkers || []) {
+    if (!item || !Number.isFinite(Number(item.lat)) || !Number.isFinite(Number(item.lon))) continue;
+    const rawId = String(item.id || `${item.lat}-${item.lon}`);
+    const id = rawId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    activeIds.add(id);
+    let el = poiContainer.querySelector(`[data-poi-id="${id}"]`);
+    if (!el) {
+      el = makePoiMarkerContent(item);
+      el.dataset.poiId = id;
+      poiContainer.appendChild(el);
+    }
+    el.dataset.lat = Number(item.lat);
+    el.dataset.lng = Number(item.lon);
+    const label = el.querySelector('.poi-marker__label');
+    if (label) label.textContent = String(item.name || '');
+    el.classList.toggle('poi-marker--selected', Boolean(item.selected));
+    el.classList.toggle('poi-marker--observation', item.kind === 'observation');
+    el.classList.toggle('poi-marker--target', item.kind === 'target');
+  }
+  poiContainer.querySelectorAll('.poi-marker').forEach((el) => {
+    if (!activeIds.has(el.dataset.poiId)) el.remove();
+  });
+  if (typeof overlay.draw === 'function') overlay.draw();
+}
+
+// Tourism Plan style: numbered pins for the user's selected places.
+function syncSelectedPlaces() {
+  if (!map.value || !mapsApi?.Marker) return;
+  const activeIds = new Set();
+  (props.selectedPlaces || []).forEach((place, index) => {
+    const lat = Number(place.latitude ?? place.lat);
+    const lng = Number(place.longitude ?? place.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const id = `sel-${lat.toFixed(6)}-${lng.toFixed(6)}`;
+    activeIds.add(id);
+    let marker = selectedPlaceMarkers.get(id);
+    if (!marker) {
+      marker = new mapsApi.Marker({
+        map: map.value,
+        position: { lat, lng },
+        label: String(index + 1),
+        title: String(place.name || `Place ${index + 1}`),
+        animation: mapsApi.Animation?.DROP,
+      });
+      selectedPlaceMarkers.set(id, marker);
+    }
+    marker.setPosition({ lat, lng });
+    marker.setLabel(String(index + 1));
+    marker.setTitle(String(place.name || `Place ${index + 1}`));
+  });
+  for (const [id, marker] of selectedPlaceMarkers) {
+    if (!activeIds.has(id)) {
+      marker.setMap(null);
+      selectedPlaceMarkers.delete(id);
+    }
+  }
+}
+
+// Tourism Plan style: observation points as directional arrows (surrounding
+// points green, top-down blue) with dashed connector lines to their place.
+function syncObservationPlan() {
+  if (!map.value || !mapsApi?.Marker) return;
+  const activeIds = new Set();
+  const bounds = new mapsApi.LatLngBounds();
+  (props.observationPlan || []).forEach((group, groupIndex) => {
+    const place = group?.place || {};
+    const placeLat = Number(place.latitude ?? place.lat);
+    const placeLng = Number(place.longitude ?? place.lon);
+    const hasPlace = Number.isFinite(placeLat) && Number.isFinite(placeLng);
+    if (hasPlace) {
+      const placeId = `plan-place-${groupIndex}`;
+      activeIds.add(placeId);
+      let marker = planMarkers.get(placeId);
+      if (!marker) {
+        marker = new mapsApi.Marker({
+          map: map.value,
+          position: { lat: placeLat, lng: placeLng },
+          icon: {
+            path: mapsApi.SymbolPath.CIRCLE,
+            scale: 8,
+            fillColor: '#e74c3c',
+            fillOpacity: 0.8,
+            strokeColor: '#fff',
+            strokeWeight: 2,
+          },
+          title: String(place.name || 'Target'),
+        });
+        planMarkers.set(placeId, marker);
+      } else {
+        marker.setPosition({ lat: placeLat, lng: placeLng });
+      }
+      bounds.extend({ lat: placeLat, lng: placeLng });
+    }
+    (group?.points || []).forEach((point, pointIndex) => {
+      const lat = Number(point.latitude);
+      const lng = Number(point.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const isTop = Number(point.altitude) >= 100;
+      const pointId = `plan-point-${groupIndex}-${pointIndex}`;
+      activeIds.add(pointId);
+      let marker = planMarkers.get(pointId);
+      if (!marker) {
+        marker = new mapsApi.Marker({
+          map: map.value,
+          position: { lat, lng },
+          icon: {
+            path: mapsApi.SymbolPath.BACKWARD_CLOSED_ARROW,
+            scale: 5,
+            fillColor: isTop ? '#3498db' : '#2ecc71',
+            fillOpacity: 0.9,
+            strokeColor: '#fff',
+            strokeWeight: 2,
+            rotation: Number(point.yaw) || 0,
+          },
+          title: `${isTop ? 'Top' : 'Observation'} - ${Math.round(Number(point.altitude))}m`,
+        });
+        planMarkers.set(pointId, marker);
+      } else {
+        marker.setPosition({ lat, lng });
+        marker.setIcon({
+          ...marker.getIcon(),
+          rotation: Number(point.yaw) || 0,
+        });
+      }
+      bounds.extend({ lat, lng });
+      if (hasPlace) {
+        const lineId = `plan-line-${groupIndex}-${pointIndex}`;
+        activeIds.add(lineId);
+        let line = planPolylines.get(lineId);
+        if (!line) {
+          line = new mapsApi.Polyline({
+            map: map.value,
+            path: [
+              { lat: placeLat, lng: placeLng },
+              { lat, lng },
+            ],
+            geodesic: true,
+            strokeColor: isTop ? '#3498db' : '#2ecc71',
+            strokeOpacity: 0.4,
+            strokeWeight: 1,
+            icons: [
+              {
+                icon: { path: mapsApi.SymbolPath.FORWARD_CLOSED_ARROW, scale: 2 },
+                offset: '100%',
+              },
+            ],
+          });
+          planPolylines.set(lineId, line);
+        } else {
+          line.setPath([
+            { lat: placeLat, lng: placeLng },
+            { lat, lng },
+          ]);
+        }
+      }
+    });
+  });
+  for (const [id, marker] of planMarkers) {
+    if (!activeIds.has(id)) {
+      marker.setMap(null);
+      planMarkers.delete(id);
+    }
+  }
+  for (const [id, line] of planPolylines) {
+    if (!activeIds.has(id)) {
+      line.setMap(null);
+      planPolylines.delete(id);
+    }
+  }
+  if ((props.observationPlan || []).length && bounds && !bounds.isEmpty()) {
+    map.value.fitBounds(bounds, { top: 60, right: 48, bottom: 56, left: 48 });
   }
 }
 
@@ -360,6 +607,9 @@ onMounted(async () => {
     listeners.push(mapsApi.event.addListener(map.value, 'zoom_changed', handleZoomChanged));
     attachMapClickListener();
     syncFleetMarkers();
+    syncPoiMarkers();
+    syncSelectedPlaces();
+    syncObservationPlan();
     fitFleetBounds(true);
 
     // Apply again after tiles settle — watch() may have missed the pre-mount props.
@@ -392,6 +642,20 @@ onUnmounted(() => {
   fleetMarkers.clear();
   fleetRoutes.forEach((route) => route.setMap(null));
   fleetRoutes.clear();
+  selectedPlaceMarkers.forEach((marker) => marker.setMap(null));
+  selectedPlaceMarkers.clear();
+  planMarkers.forEach((marker) => marker.setMap(null));
+  planMarkers.clear();
+  planPolylines.forEach((line) => line.setMap(null));
+  planPolylines.clear();
+  if (poiOverlay) {
+    poiOverlay.setMap(null);
+    poiOverlay = null;
+  }
+  if (poiContainer) {
+    poiContainer.remove();
+    poiContainer = null;
+  }
   targetMarker?.setMap(null);
   targetMarker = null;
 });
@@ -471,6 +735,27 @@ watch(() => props.visible, async (visible) => {
 watch(
   () => [props.fleetDrones, props.selectedDroneId, props.sharedTarget],
   syncFleetMarkers,
+  { deep: true },
+);
+watch(
+  () => props.poiMarkers,
+  () => {
+    syncPoiMarkers();
+  },
+  { deep: true },
+);
+watch(
+  () => props.selectedPlaces,
+  () => {
+    syncSelectedPlaces();
+  },
+  { deep: true },
+);
+watch(
+  () => props.observationPlan,
+  () => {
+    syncObservationPlan();
+  },
   { deep: true },
 );
 watch(
@@ -680,12 +965,73 @@ function attachMapClickListener() {
     clickListener.remove();
     clickListener = null;
   }
-  if (props.isPicking || props.isPanelOpen) {
+  if (props.isPicking || props.isPanelOpen || props.pickEnabled) {
     clickListener = map.value.addListener('click', (e) => {
       const lat = e.latLng.lat();
       const lng = e.latLng.lng();
-      emit('mapClick', { lat, lng });
+      if (props.pickEnabled) {
+        emit('mapPick', { lat, lng });
+      } else {
+        emit('mapClick', { lat, lng });
+      }
     });
+  }
+}
+
+// Programmatic camera flights used by the tourism observation flow. The
+// lastProgrammatic* guards keep these from being reported back as user
+// gestures by handleCenterChanged / handleZoomChanged.
+function flyTo(lat, lng, zoom = 16) {
+  if (!map.value) return false;
+  const position = { lat: Number(lat), lng: Number(lng) };
+  if (!Number.isFinite(position.lat) || !Number.isFinite(position.lng)) return false;
+  const targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(Number(zoom) || 16)));
+  lastProgrammaticCenter = position;
+  lastProgrammaticZoom = targetZoom;
+  map.value.panTo(position);
+  if (Math.abs(map.value.getZoom() - targetZoom) > 0.5) {
+    map.value.setZoom(targetZoom);
+  }
+  return true;
+}
+
+// Pull back to a world view before a mission flies to its target. Zoom 3
+// stays inside Google Maps' own limits even though it is below the app's
+// altitude-derived MIN_ZOOM (the altitude watch is disabled in fleet mode).
+function flyToWorld() {
+  if (!map.value) return false;
+  lastProgrammaticZoom = 3;
+  map.value.setZoom(3);
+  return true;
+}
+
+// Capture the current map render as a PNG data URL. Google Maps usually
+// renders into a WebGL canvas that is tainted by cross-origin tiles, so the
+// caller must be prepared for null and fall back to a placeholder image.
+function getScreenshot() {
+  if (!map.value || !containerRef.value) return null;
+  try {
+    let canvas = null;
+    for (const candidate of containerRef.value.querySelectorAll('canvas')) {
+      if (
+        candidate.width > 0
+        && candidate.height > 0
+        && (!canvas || candidate.width * candidate.height > canvas.width * canvas.height)
+      ) {
+        canvas = candidate;
+      }
+    }
+    if (!canvas || !canvas.width || !canvas.height) return null;
+    const shot = document.createElement('canvas');
+    shot.width = canvas.width;
+    shot.height = canvas.height;
+    const ctx = shot.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(canvas, 0, 0);
+    return shot.toDataURL('image/png');
+  } catch (error) {
+    console.warn('[MapView] Map canvas is not readable for screenshots.', error);
+    return null;
   }
 }
 
@@ -695,9 +1041,13 @@ defineExpose({
   /** Google Maps Map instance (null until loaded). Used by Mission Arena overlays only. */
   getMap: () => map.value,
   getMapsApi: () => mapsApi,
+  flyTo,
+  flyToWorld,
+  getScreenshot,
+  fitToPlan: syncObservationPlan,
 });
 
-watch(() => [props.isPicking, props.isPanelOpen], () => {
+watch(() => [props.isPicking, props.isPanelOpen, props.pickEnabled], () => {
   attachMapClickListener();
 });
 
@@ -784,5 +1134,65 @@ watch(() => [props.isPicking, props.isPanelOpen], () => {
   color: #aaaaaa;
   font-size: 0.85rem;
   max-width: 480px;
+}
+</style>
+
+<style>
+/* Navigation-style POI markers rendered as a custom OverlayView. These live
+   inside Google Maps' overlay DOM, so they need global (non-scoped) styles. */
+.poi-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.poi-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 3px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: #0b3a55;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.38);
+  color: #e8f7ff;
+  font-family: 'Calibri', 'Segoe UI', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: default;
+  transform-origin: 50% 100%;
+}
+
+.poi-marker--selected {
+  background: #0e7a5f;
+  border-color: #63e6be;
+  box-shadow: 0 2px 10px rgba(99, 230, 190, 0.45);
+}
+
+.poi-marker--observation {
+  background: #4b2e83;
+  border-color: #b197fc;
+}
+
+.poi-marker--target {
+  background: #b45309;
+  border-color: #fcd34d;
+}
+
+.poi-marker__pin {
+  flex: 0 0 auto;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+}
+
+.poi-marker__label {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

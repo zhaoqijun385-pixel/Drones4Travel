@@ -10,6 +10,12 @@ import {
   planNavigateMission,
   routePolyline,
 } from './fleetMissionPlanner.js';
+import {
+  advanceTourismMission,
+  destinationFromBearing,
+  planTourismObservationMission,
+  tourismRoutePolyline,
+} from './tourismObservationPlanner.js';
 import { advanceManualFlight, applyManualFlightMove } from './fleetManualFlight.js';
 
 // The fleet layer is deliberately opt-in. The existing single-drone aerial
@@ -239,9 +245,24 @@ function tickDemoFleet() {
   const mission = activeMission.value;
   if (!mission) return;
   let completeCount = 0;
-  advanceMission(mission, Object.values(drones), delta).forEach((next) => {
+  const nextStates = mission.kind === 'tourism'
+    ? advanceTourismMission(mission, delta)
+    : advanceMission(mission, Object.values(drones), delta);
+  nextStates.forEach((next) => {
     const drone = drones[next.droneId];
     if (!drone) return;
+    if (mission.kind === 'tourism') {
+      drone.lat = next.lat;
+      drone.lon = next.lon;
+      drone.alt = next.alt;
+      drone.phase = next.phase;
+      drone.missionProgress = next.progress;
+      drone.battery = Math.max(30, drone.battery - 0.0012);
+      drone.sequence += 1;
+      drone.timestamp = Date.now();
+      if (next.complete) completeCount += 1;
+      return;
+    }
     const dx = next.x - drone.x;
     const dy = next.y - drone.y;
     if (Math.hypot(dx, dy) > 0.001) drone.yaw = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
@@ -262,7 +283,14 @@ function tickDemoFleet() {
       const drone = drones[route.droneId];
       if (drone) drone.route = [];
     });
-    activeMission.value = null;
+    if (mission.kind === 'tourism') {
+      // Keep a finished tourism mission around (completed: true) so views
+      // can read fleet.activeMission.value.completed and show the final
+      // observation progress instead of the mission disappearing instantly.
+      mission.completed = true;
+    } else {
+      activeMission.value = null;
+    }
   }
 }
 
@@ -728,6 +756,74 @@ function activatePlannedMission(mission) {
   return true;
 }
 
+function activateTourismMission(mission) {
+  if (!mission?.routes?.length) return false;
+  Object.values(drones).forEach((drone) => {
+    if (drone.local) return;
+    drone.autoTargetZ = null;
+    drone.autoAction = '';
+    drone.route = [];
+    drone.missionProgress = 0;
+    drone.missionTarget = '';
+    if (drone.phase !== 'parked') drone.phase = 'holding';
+  });
+  mission.routes.forEach((route) => {
+    const drone = drones[route.droneId];
+    if (!drone) return;
+    drone.route = tourismRoutePolyline(route).map((point) => ({ ...point }));
+    drone.phase = 'queued';
+    drone.missionProgress = 0;
+    drone.missionTarget = route.targetLabel;
+    drone.sequence += 1;
+    route.elapsedMs = 0;
+  });
+  activeMission.value = mission;
+  demoMissionLastTickAt = Date.now();
+  return true;
+}
+
+function startTourismMission(target, options = {}) {
+  if (!demoEnabled.value) setDemoEnabled(true);
+  const mission = planTourismObservationMission(Object.values(drones), target, options);
+  if (!mission?.routes?.length) return false;
+  // Park every unassigned aircraft near the target so the whole fleet is
+  // visible around the observation area instead of lingering at old homes.
+  const assignedIds = new Set(mission.routes.map((route) => route.droneId));
+  Object.values(drones)
+    .filter((drone) => !drone.local && drone.online !== false && !assignedIds.has(drone.droneId))
+    .forEach((drone, index) => {
+      const position = destinationFromBearing(
+        Number(target.lat),
+        Number(target.lon),
+        44 + (index % 4) * 9,
+        index * 137 + 18,
+      );
+      Object.assign(drone, {
+        lat: position.lat,
+        lon: position.lon,
+        phase: 'parked',
+        missionProgress: 0,
+        missionTarget: '',
+        route: [],
+      });
+      drone.sequence += 1;
+      drone.timestamp = Date.now();
+    });
+  sharedTarget.value = {
+    lat: Number(target.lat),
+    lon: Number(target.lon),
+    alt: Number(options.minAltM || 80),
+    name: String(target.name || 'Tourism target'),
+  };
+  const ok = activateTourismMission(mission);
+  if (ok && typeof window !== 'undefined' && window.showFleetOverview) {
+    window.showFleetOverview(getRenderStates(), {
+      range: Math.max(Number(options.radiusM || 180) * 2.2, 300),
+    });
+  }
+  return ok;
+}
+
 function navigateDroneTo(droneId, targetDroneId) {
   if (!demoEnabled.value) setDemoEnabled(true);
   return activatePlannedMission(planNavigateMission(Object.values(drones), droneId, targetDroneId));
@@ -898,6 +994,7 @@ export function useDroneFleet() {
     updateDroneAgent,
     setDroneTakeoffAltitude,
     startDemoMission,
+    startTourismMission,
     navigateDroneTo,
     gatherAt,
     stopDemoMission,

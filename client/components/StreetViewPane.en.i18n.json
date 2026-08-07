@@ -1,3 +1,5 @@
 {
-  "unavailable": "Street View unavailable:"
+  "unavailable": "No Street View at this location",
+  "loading": "Loading Street View…",
+  "load_failed": "Street View failed to load, retrying…"
 }

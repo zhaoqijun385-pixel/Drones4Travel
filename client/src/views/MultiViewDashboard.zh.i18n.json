@@ -1,0 +1,14 @@
+{
+  "page_multiview": "多视角",
+  "mode_3d": "3D 空中",
+  "mode_2d": "2D 地图",
+  "mode_split": "双屏联动",
+  "map_type": "地图类型",
+  "tourism": "旅游观测",
+  "photos_taken": "已拍摄",
+  "mission_completed": "任务完成",
+  "street_view": "街景预览",
+  "places_selected": "已选地点",
+  "places_clear": "清空",
+  "start_error": "没有可用的无人机执行观测任务。"
+}

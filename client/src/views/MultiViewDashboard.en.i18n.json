@@ -1,0 +1,14 @@
+{
+  "page_multiview": "Multi-view",
+  "mode_3d": "3D Aerial",
+  "mode_2d": "2D Map",
+  "mode_split": "Split",
+  "map_type": "Map type",
+  "tourism": "Observation",
+  "photos_taken": "Photos taken",
+  "mission_completed": "Mission complete",
+  "street_view": "Street View",
+  "places_selected": "Selected places",
+  "places_clear": "Clear",
+  "start_error": "No drones available for the observation mission."
+}

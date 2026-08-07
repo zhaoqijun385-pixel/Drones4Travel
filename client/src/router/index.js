@@ -12,8 +12,14 @@ import ReportsView from '@/views/ReportsView.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
 import MissionArenaView from '@/views/MissionArenaView.vue';
 import SurveyMissionView from '@/views/SurveyMissionView.vue';
+import MultiViewDashboard from '@/views/MultiViewDashboard.vue';
 
 const routes = [
+  {
+  path: '/multiview',
+  name: 'MultiView',
+  component: () => import('@/views/MultiViewDashboard.vue'),
+  },
   {
     path: '/',
     name: 'Aerial',

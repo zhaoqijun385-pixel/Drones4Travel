@@ -5,13 +5,6 @@ import { useAppSettings } from '@shared-composables/useAppSettings.js';
 
 const { settings } = useAppSettings();
 
-/**
- * Google Fonts mapping.
- * Fonts not available locally on Linux are loaded via Google Fonts CDN.
- * Calibri is not on Google Fonts — Lato is the closest web-font substitute.
- * SimHei and PingFang SC are not on Google Fonts — they are only available
- * when the user has them installed locally.
- */
 const GOOGLE_FONTS = {
   'Calibri':      'Lato',
   'Segoe UI':     'Roboto',
@@ -34,7 +27,6 @@ function loadGoogleFont(family) {
 }
 
 onMounted(() => {
-  /* Apply initial font-size to html root for rem cascading. */
   document.documentElement.style.fontSize = settings.fontSize;
   loadGoogleFont(settings.fontFamily);
 });
@@ -43,10 +35,6 @@ watchEffect(() => {
   loadGoogleFont(settings.fontFamily);
 });
 
-/**
- * Build a CSS font-family stack that includes the Google Font fallback
- * so the font renders correctly even when not installed locally.
- */
 function buildFontFamily(selected) {
   const gFont = GOOGLE_FONTS[selected];
   const parts = [`'${selected}'`];
@@ -57,26 +45,48 @@ function buildFontFamily(selected) {
 </script>
 
 <template>
-  <div
-    id="app"
-    :style="{
-      fontFamily: buildFontFamily(settings.fontFamily),
-      fontSize: settings.fontSize,
-    }"
-  >
+  <div id="app" :style="{ fontFamily: buildFontFamily(settings.fontFamily), fontSize: settings.fontSize }">
+    <nav class="app-nav">
+      <router-link to="/" class="app-nav__link">3D Aerial</router-link>
+      <router-link to="/multiview" class="app-nav__link">Tourism Observer</router-link>
+    </nav>
     <RouterView />
   </div>
 </template>
 
 <style>
-/* Reset that keeps the Vue overlay and Cesium canvas aligned. */
 #app {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  pointer-events: none; /* let the active view decide where it captures input */
+  pointer-events: none;
   font-family: Calibri, 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
+.app-nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  width: 100%;
+  padding: 8px 20px;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(6px);
+  display: flex;
+  gap: 20px;
+  pointer-events: auto;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+.app-nav__link {
+  color: #e0f0ff;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+.app-nav__link:hover { background: rgba(255,255,255,0.1); color: #fff; }
+.app-nav__link.router-link-active { color: #53b7ff; background: rgba(83,183,255,0.15); }
 </style>

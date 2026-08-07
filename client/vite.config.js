@@ -33,6 +33,11 @@ export default defineConfig({
         target: 'http://127.0.0.1:8008',
         changeOrigin: true,
       },
+      // Backend API (FastAPI): tourism planning, fleet rooms, auth, etc.
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
     },
   },
 });

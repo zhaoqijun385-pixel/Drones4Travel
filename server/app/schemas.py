@@ -81,3 +81,80 @@ class OpenClawMessageCreate(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1, max_length=40_000)
     external_id: str | None = Field(default=None, max_length=255)
+
+
+# ---------------------------------------------------------------------------
+# Tourism schemas
+# ---------------------------------------------------------------------------
+
+class TourismPlanRequest(BaseModel):
+    """Accepts either a query string OR direct latitude/longitude."""
+    query: str = Field(default="", max_length=200)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+
+
+class PlaceInfo(BaseModel):
+    name: str
+    address: str
+    latitude: float
+    longitude: float
+
+
+class ObservationPoint(BaseModel):
+    latitude: float
+    longitude: float
+    altitude: float
+    yaw: float
+
+
+class PlaceSuggestion(BaseModel):
+    place_id: str
+    name: str
+    address: str
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class SuggestResponse(BaseModel):
+    suggestions: list[PlaceSuggestion]
+
+
+class NearbyPlace(BaseModel):
+    place_id: str
+    name: str
+    address: str
+    latitude: float
+    longitude: float
+    types: list[str] = []
+    rating: float | None = None
+
+
+class NearbySearchResponse(BaseModel):
+    places: list[NearbyPlace]
+
+
+class BatchPlaceItem(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
+class TourismBatchRequest(BaseModel):
+    queries: list[str] = []
+    places: list[BatchPlaceItem] = []
+
+
+class BatchPlanItem(BaseModel):
+    place: PlaceInfo
+    observation_points: list[ObservationPoint]
+
+
+class TourismBatchResponse(BaseModel):
+    results: list[BatchPlanItem]
+
+
+class StreetViewInfo(BaseModel):
+    available: bool
+    pano_id: str | None = None
+    lat: float
+    lng: float

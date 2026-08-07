@@ -1,3 +1,5 @@
 {
-  "unavailable": "街景不可用:"
+  "unavailable": "该位置无街景",
+  "loading": "街景加载中…",
+  "load_failed": "街景加载失败，正在重试…"
 }
