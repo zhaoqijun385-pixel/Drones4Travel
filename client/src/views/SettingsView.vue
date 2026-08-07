@@ -90,6 +90,7 @@ onMounted(() => {
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
   registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
+  registerPage({ id: 'reports', nameKey: 'aerialview.page_reports', route: '/reports' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
@@ -147,6 +148,7 @@ onUnmounted(() => {
   unregisterPage('aerial');
   unregisterPage('realdrone');
   unregisterPage('map');
+  unregisterPage('reports');
   unregisterPage('myspace');
   unregisterPage('chat');
   unregisterPage('extensions');

@@ -1,4 +1,4 @@
-import config from '../../config.json';
+import config from '../runtimeConfig.js';
 
 const CALLBACK_NAME = '__gmapsStreetViewInit';
 const API_KEY = config.googleApiKey ?? '';

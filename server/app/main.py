@@ -24,6 +24,7 @@ from .drone_identity import router as drone_identity_router
 from .fleet import HUB as fleet_hub
 from .fleet import router as fleet_router
 from .matrix_auth import router as matrix_router
+from .mission_reports import router as mission_reports_router
 from .openclaw_chat import router as openclaw_chat_router
 from .openclaw_agents import router as openclaw_agents_router
 from .schemas import UserCreate, UserRead, UserUpdate
@@ -124,6 +125,7 @@ app.include_router(drone_identity_router, prefix="/api")
 app.include_router(fleet_router, prefix="/api")
 app.include_router(openclaw_chat_router, prefix="/api")
 app.include_router(openclaw_agents_router, prefix="/api")
+app.include_router(mission_reports_router, prefix="/api")
 
 # --- Mission Arena: 2D escort/infiltrate sim (sidelane; no radio) ------------
 app.include_router(sim_arena_router, prefix="/api")

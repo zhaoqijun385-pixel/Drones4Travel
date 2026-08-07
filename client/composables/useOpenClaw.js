@@ -1,5 +1,5 @@
 import { ref, computed, onUnmounted } from 'vue';
-import config from '../config.json';
+import config from '../src/runtimeConfig.js';
 import { apiFetch, useAuth } from './useAuth.js';
 
 const DEFAULT_URL = 'ws://127.0.0.1:18789';

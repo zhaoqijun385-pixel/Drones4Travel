@@ -1,4 +1,4 @@
-import config from '../config.json';
+import config from './runtimeConfig.js';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 import { applyNeutralSphericalHarmonics, pinSceneSphericalHarmonics } from '@shared-composables/useTilesetSource.js';
 

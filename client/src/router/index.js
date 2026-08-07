@@ -8,6 +8,7 @@ import ChatView from '@/views/ChatView.vue';
 import SettingsView from '@/views/SettingsView.vue';
 import MySpaceView from '@/views/MySpaceView.vue';
 import ExtensionsView from '@/views/ExtensionsView.vue';
+import ReportsView from '@/views/ReportsView.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
 import MissionArenaView from '@/views/MissionArenaView.vue';
 import SurveyMissionView from '@/views/SurveyMissionView.vue';
@@ -81,6 +82,12 @@ const routes = [
     path: '/extensions',
     name: 'Extensions',
     component: ExtensionsView,
+  },
+  {
+    path: '/reports',
+    name: 'Reports',
+    component: ReportsView,
+    meta: { requiresAuth: true },
   },
   {
     path: '/mission-arena',

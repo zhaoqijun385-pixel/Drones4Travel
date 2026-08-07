@@ -16,6 +16,7 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 
 from app.models import (
     MatrixAccount,
+    MissionReport,
     OAuthAccount,
     OpenClawConversation,
     OpenClawMessage,
@@ -33,6 +34,7 @@ def main() -> None:
         MatrixAccount.__table__,
         OpenClawConversation.__table__,
         OpenClawMessage.__table__,
+        MissionReport.__table__,
     ):
         print(str(CreateTable(table, if_not_exists=True).compile(dialect=dialect)).rstrip(";") + ";")
         for index in sorted(table.indexes, key=lambda i: i.name):

@@ -157,3 +157,44 @@ class OpenClawMessage(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class MissionReport(Base):
+    """Per-user Task3 PDF report index.
+
+    The PDF itself lives on disk so downloads stay cheap; report_payload keeps
+    the searchable summary, route brief, and collision warnings in the DB.
+    """
+
+    __tablename__ = "mission_report"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[GUID] = mapped_column(
+        GUID,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(length=180), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    report_payload: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON, "sqlite"),
+        nullable=False,
+        default=dict,
+    )
+    pdf_path: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
